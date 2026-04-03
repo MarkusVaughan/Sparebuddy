@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import transactions, accounts, categories, budgets, assets
+from .routers import transactions, accounts, categories, budgets, assets, goals
 
 app = FastAPI(title="Sparebuddy API", version="0.1.0")
 
@@ -18,6 +18,7 @@ app.include_router(accounts.router)
 app.include_router(categories.router)
 app.include_router(budgets.router)
 app.include_router(assets.router)
+app.include_router(goals.router)
 
 
 @app.get("/health")

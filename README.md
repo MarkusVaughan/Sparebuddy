@@ -27,8 +27,8 @@ pip install -r requirements.txt
 uvicorn backend.main:app --reload
 ```
 
-Backend kjører på: **http://localhost:8000**
-API-dokumentasjon: **http://localhost:8000/docs**
+Backend kjører på: **http://localhost:8001**
+API-dokumentasjon: **http://localhost:8001/docs**
 
 ---
 

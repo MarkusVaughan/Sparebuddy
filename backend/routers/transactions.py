@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy import extract, func
 from pydantic import BaseModel
@@ -108,8 +109,18 @@ async def import_transactions(
         raise HTTPException(status_code=404, detail="Account not found")
 
     content = await file.read()
-    result = import_dnb_csv(content, account_id, db)
-    return result
+    try:
+        result = import_dnb_csv(content, account_id, db)
+        return result
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="Importen inneholder duplikater eller ugyldige rader for databasen.",
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/apply-rules")

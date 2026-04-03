@@ -44,8 +44,17 @@ export const budgets = {
 export const assets = {
   list: (userId = 1) => api.get('/assets/', { params: { user_id: userId } }).then(r => r.data),
   history: (name) => api.get(`/assets/history/${encodeURIComponent(name)}`).then(r => r.data),
+  netWorthHistory: (userId = 1) => api.get('/assets/net-worth-history', { params: { user_id: userId } }).then(r => r.data),
   record: (data) => api.post('/assets/', data).then(r => r.data),
+  update: (id, data) => api.patch(`/assets/${id}`, data).then(r => r.data),
   delete: (id) => api.delete(`/assets/${id}`).then(r => r.data),
+}
+
+export const goals = {
+  list: (userId = 1) => api.get('/goals/', { params: { user_id: userId } }).then(r => r.data),
+  create: (data) => api.post('/goals/', data).then(r => r.data),
+  update: (id, data) => api.patch(`/goals/${id}`, data).then(r => r.data),
+  delete: (id) => api.delete(`/goals/${id}`).then(r => r.data),
 }
 
 export default api

@@ -45,6 +45,12 @@ class CategoryType(str, enum.Enum):
     income = "income"
 
 
+class GoalType(str, enum.Enum):
+    savings = "savings"
+    debt_reduction = "debt_reduction"
+    expense_reduction = "expense_reduction"
+
+
 class User(Base):
     __tablename__ = "users"
     id = Column(BigInteger, primary_key=True, index=True)
@@ -56,6 +62,7 @@ class User(Base):
     accounts = relationship("Account", back_populates="user")
     budget_targets = relationship("BudgetTarget", back_populates="user")
     assets = relationship("Asset", back_populates="user")
+    goals = relationship("Goal", back_populates="user")
 
 
 class Account(Base):
@@ -133,3 +140,33 @@ class Asset(Base):
     notes = Column(Text, nullable=True)
 
     user = relationship("User", back_populates="assets")
+
+
+class Goal(Base):
+    __tablename__ = "goals"
+    id = Column(BigInteger, primary_key=True, index=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    name = Column(String, nullable=False)
+    goal_type = Column(String, nullable=False, default=GoalType.savings.value)
+    target_amount = Column(Numeric(12, 2), nullable=False)
+    current_amount = Column(Numeric(12, 2), nullable=False, default=0)
+    monthly_target = Column(Numeric(12, 2), nullable=True)
+    start_month = Column(String, nullable=False)   # Format: "2026-04"
+    target_month = Column(String, nullable=False)  # Format: "2026-06"
+    category_id = Column(BigInteger, ForeignKey("categories.id"), nullable=True)
+    baseline_amount = Column(Numeric(12, 2), nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    user = relationship("User", back_populates="goals")
+    category = relationship("Category")
+    asset_links = relationship("GoalAssetLink", back_populates="goal", cascade="all, delete-orphan")
+
+
+class GoalAssetLink(Base):
+    __tablename__ = "goal_asset_links"
+    id = Column(BigInteger, primary_key=True, index=True)
+    goal_id = Column(BigInteger, ForeignKey("goals.id"), nullable=False)
+    asset_name = Column(String, nullable=False)
+
+    goal = relationship("Goal", back_populates="asset_links")

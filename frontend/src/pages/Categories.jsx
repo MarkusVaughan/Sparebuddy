@@ -4,6 +4,7 @@ import { Plus, Trash2, X } from 'lucide-react'
 
 export default function Categories() {
   const [cats, setCats] = useState([])
+  const [errorMsg, setErrorMsg] = useState('')
   const [showNew, setShowNew] = useState(false)
   const [newCat, setNewCat] = useState({ name: '', color: '#22c55e', icon: '💳', category_type: 'expense' })
   const [ruleInputs, setRuleInputs] = useState({})
@@ -34,8 +35,13 @@ export default function Categories() {
 
   async function deleteCategory(id) {
     if (!confirm('Slett kategorien? Transaksjoner vil miste kategoritilknytning.')) return
-    await catApi.delete(id)
-    load()
+    try {
+      setErrorMsg('')
+      await catApi.delete(id)
+      load()
+    } catch (error) {
+      setErrorMsg(error?.response?.data?.detail || 'Kunne ikke slette kategori.')
+    }
   }
 
   return (
@@ -52,6 +58,12 @@ export default function Categories() {
           <Plus size={16} /> Ny kategori
         </button>
       </div>
+
+      {errorMsg && (
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 mb-6 text-sm">
+          {errorMsg}
+        </div>
+      )}
 
       {showNew && (
         <form onSubmit={createCategory} className="bg-white rounded-xl border border-gray-200 p-5 mb-6 flex gap-3 items-end flex-wrap">

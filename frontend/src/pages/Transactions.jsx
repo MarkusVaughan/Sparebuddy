@@ -1,9 +1,12 @@
 import { useEffect, useState, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { transactions as txApi, accounts as accApi, categories as catApi } from '../utils/api'
+import { Plus } from 'lucide-react'
 import { formatNOK, formatDate, currentMonth } from '../utils/format'
 import { Upload, RefreshCw, Search } from 'lucide-react'
 
 export default function Transactions() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [txs, setTxs] = useState([])
   const [accounts, setAccounts] = useState([])
   const [categories, setCategories] = useState([])
@@ -13,13 +16,16 @@ export default function Transactions() {
   const [importMsg, setImportMsg] = useState(null)
 
   const [filters, setFilters] = useState({
-    account_id: '',
-    month: currentMonth(),
-    search: '',
-    uncategorized: false,
+    account_id: searchParams.get('account_id') || '',
+    category_id: searchParams.get('category_id') || '',
+    month: searchParams.get('month') || currentMonth(),
+    search: searchParams.get('search') || '',
+    uncategorized: searchParams.get('uncategorized') === 'true',
   })
 
   const [selectedAccount, setSelectedAccount] = useState('')
+  const [showNewAccount, setShowNewAccount] = useState(false)
+  const [newAccount, setNewAccount] = useState({ name: '', bank: 'DNB', account_type: 'checking' })
   const fileRef = useRef()
 
   useEffect(() => {
@@ -33,6 +39,7 @@ export default function Transactions() {
     setLoading(true)
     const params = {}
     if (filters.account_id) params.account_id = filters.account_id
+    if (filters.category_id) params.category_id = filters.category_id
     if (filters.month) params.month = filters.month
     if (filters.search) params.search = filters.search
     if (filters.uncategorized) params.uncategorized = true
@@ -42,6 +49,16 @@ export default function Transactions() {
       setTotal(data.total)
     }).finally(() => setLoading(false))
   }, [filters])
+
+  useEffect(() => {
+    const params = {}
+    if (filters.account_id) params.account_id = filters.account_id
+    if (filters.category_id) params.category_id = filters.category_id
+    if (filters.month) params.month = filters.month
+    if (filters.search) params.search = filters.search
+    if (filters.uncategorized) params.uncategorized = 'true'
+    setSearchParams(params, { replace: true })
+  }, [filters, setSearchParams])
 
   async function handleImport(e) {
     const file = e.target.files[0]
@@ -53,13 +70,21 @@ export default function Transactions() {
     setImportMsg(null)
     try {
       const result = await txApi.import(selectedAccount, file)
+      const errorCount = result.errors?.length ?? 0
       setImportMsg({
-        type: 'success',
-        text: `Importert ${result.imported} transaksjoner, ${result.skipped_duplicates} duplikater hoppet over.`,
+        type: errorCount > 0 ? 'error' : 'success',
+        text:
+          errorCount > 0
+            ? `Importert ${result.imported} transaksjoner, ${result.skipped_duplicates} duplikater hoppet over, ${errorCount} rader feilet.`
+            : `Importert ${result.imported} transaksjoner, ${result.skipped_duplicates} duplikater hoppet over.`,
       })
       setFilters(f => ({ ...f })) // trigger reload
-    } catch {
-      setImportMsg({ type: 'error', text: 'Import feilet. Sjekk filen og prøv igjen.' })
+    } catch (error) {
+      const detail = error?.response?.data?.detail
+      setImportMsg({
+        type: 'error',
+        text: detail || 'Import feilet. Sjekk filen og prøv igjen.',
+      })
     } finally {
       setImporting(false)
       fileRef.current.value = ''
@@ -77,6 +102,16 @@ export default function Transactions() {
     setFilters(f => ({ ...f }))
   }
 
+  async function handleCreateAccount(e) {
+    e.preventDefault()
+    const created = await accApi.create(newAccount)
+    const updated = await accApi.list()
+    setAccounts(updated)
+    setSelectedAccount(String(created.id))
+    setNewAccount({ name: '', bank: 'DNB', account_type: 'checking' })
+    setShowNewAccount(false)
+  }
+
   return (
     <div className="p-8">
       <div className="flex items-center justify-between mb-6">
@@ -92,7 +127,7 @@ export default function Transactions() {
       </div>
 
       {/* Import section */}
-      <div className="bg-white rounded-xl border border-gray-200 p-4 mb-6 flex items-center gap-4 flex-wrap">
+      <div className="bg-white rounded-xl border border-gray-200 p-4 mb-3 flex items-center gap-4 flex-wrap">
         <select
           className="border border-gray-200 rounded-lg px-3 py-2 text-sm"
           value={selectedAccount}
@@ -114,12 +149,56 @@ export default function Transactions() {
             disabled={importing}
           />
         </label>
+        <button
+          onClick={() => setShowNewAccount(v => !v)}
+          className="flex items-center gap-1.5 px-3 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 text-gray-600"
+        >
+          <Plus size={14} /> Ny konto
+        </button>
         {importMsg && (
           <span className={`text-sm ${importMsg.type === 'error' ? 'text-red-600' : 'text-green-700'}`}>
             {importMsg.text}
           </span>
         )}
       </div>
+
+      {/* New account form */}
+      {showNewAccount && (
+        <form onSubmit={handleCreateAccount} className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-4 flex items-end gap-3 flex-wrap">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Kontonavn</label>
+            <input
+              required type="text" placeholder="f.eks. DNB Brukskonto"
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white w-48"
+              value={newAccount.name}
+              onChange={e => setNewAccount(a => ({ ...a, name: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Bank</label>
+            <input
+              type="text" placeholder="DNB"
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white w-28"
+              value={newAccount.bank}
+              onChange={e => setNewAccount(a => ({ ...a, bank: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Type</label>
+            <select
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white"
+              value={newAccount.account_type}
+              onChange={e => setNewAccount(a => ({ ...a, account_type: e.target.value }))}
+            >
+              <option value="checking">Brukskonto</option>
+              <option value="savings">Sparekonto</option>
+              <option value="credit">Kredittkort</option>
+            </select>
+          </div>
+          <button type="submit" className="px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700">Opprett</button>
+          <button type="button" onClick={() => setShowNewAccount(false)} className="px-3 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50">Avbryt</button>
+        </form>
+      )}
 
       {/* Filters */}
       <div className="flex gap-3 mb-4 flex-wrap">
@@ -146,6 +225,14 @@ export default function Transactions() {
         >
           <option value="">Alle kontoer</option>
           {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+        </select>
+        <select
+          className="border border-gray-200 rounded-lg px-3 py-2 text-sm"
+          value={filters.category_id}
+          onChange={e => setFilters(f => ({ ...f, category_id: e.target.value }))}
+        >
+          <option value="">Alle kategorier</option>
+          {categories.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
         </select>
         <label className="flex items-center gap-2 text-sm text-gray-600 border border-gray-200 rounded-lg px-3 py-2 cursor-pointer">
           <input

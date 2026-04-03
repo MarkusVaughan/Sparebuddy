@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import extract, func
 from pydantic import BaseModel
 
-from ..database import get_db, BudgetTarget, Transaction, Category
+from ..database import get_db, BudgetTarget, Transaction, Category, CategoryType
 
 router = APIRouter(prefix="/budgets", tags=["budgets"])
 
@@ -46,16 +46,17 @@ def get_budget(month: str, user_id: int = 1, db: Session = Depends(get_db)):
     )
     actual_map = {a.category_id: abs(a.total) for a in actuals}
 
-    # Merge: include categories that have either a target or actual spending
-    category_ids = set(target_map.keys()) | set(actual_map.keys())
-    categories = db.query(Category).filter(Category.id.in_(category_ids)).all()
-    cat_map = {c.id: c for c in categories}
+    # Always include all expense categories so budget goals can be set ahead of spending.
+    categories = (
+        db.query(Category)
+        .filter(Category.category_type == CategoryType.expense)
+        .order_by(Category.name.asc())
+        .all()
+    )
 
     result = []
-    for cat_id in category_ids:
-        cat = cat_map.get(cat_id)
-        if not cat:
-            continue
+    for cat in categories:
+        cat_id = cat.id
         budget = target_map.get(cat_id, 0)
         actual = actual_map.get(cat_id, 0)
         result.append({
@@ -69,7 +70,7 @@ def get_budget(month: str, user_id: int = 1, db: Session = Depends(get_db)):
             "pct_used": round((actual / budget * 100), 1) if budget > 0 else None,
         })
 
-    return sorted(result, key=lambda x: x["actual"], reverse=True)
+    return sorted(result, key=lambda x: (-x["actual"], x["category_name"].lower()))
 
 
 @router.post("/")

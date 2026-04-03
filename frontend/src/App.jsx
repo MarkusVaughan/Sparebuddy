@@ -1,15 +1,17 @@
 import { Routes, Route, NavLink } from 'react-router-dom'
-import { LayoutDashboard, ArrowLeftRight, PiggyBank, Wallet, Tag } from 'lucide-react'
+import { LayoutDashboard, ArrowLeftRight, PiggyBank, Wallet, Tag, Target } from 'lucide-react'
 import Dashboard from './pages/Dashboard'
 import Transactions from './pages/Transactions'
 import Budget from './pages/Budget'
 import Assets from './pages/Assets'
 import Categories from './pages/Categories'
+import Goals from './pages/Goals'
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/transactions', label: 'Transaksjoner', icon: ArrowLeftRight },
   { to: '/budget', label: 'Budsjett', icon: Wallet },
+  { to: '/goals', label: 'Mål', icon: Target },
   { to: '/assets', label: 'Formue', icon: PiggyBank },
   { to: '/categories', label: 'Kategorier', icon: Tag },
 ]
@@ -50,6 +52,7 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/transactions" element={<Transactions />} />
           <Route path="/budget" element={<Budget />} />
+          <Route path="/goals" element={<Goals />} />
           <Route path="/assets" element={<Assets />} />
           <Route path="/categories" element={<Categories />} />
         </Routes>

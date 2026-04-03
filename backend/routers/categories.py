@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 from pydantic import BaseModel
 from typing import Optional
 
-from ..database import get_db, Category, CategoryRule, CategoryType
+from ..database import get_db, Category, CategoryRule, CategoryType, Transaction, BudgetTarget
 
 router = APIRouter(prefix="/categories", tags=["categories"])
 
@@ -60,9 +61,24 @@ def delete_category(category_id: int, db: Session = Depends(get_db)):
     cat = db.query(Category).filter(Category.id == category_id).first()
     if not cat:
         raise HTTPException(status_code=404, detail="Category not found")
-    db.delete(cat)
-    db.commit()
-    return {"ok": True}
+    try:
+        # Detach related records explicitly so category deletion behaves predictably.
+        db.query(Transaction).filter(Transaction.category_id == category_id).update(
+            {Transaction.category_id: None},
+            synchronize_session=False,
+        )
+        db.query(BudgetTarget).filter(BudgetTarget.category_id == category_id).delete(
+            synchronize_session=False,
+        )
+        db.query(CategoryRule).filter(CategoryRule.category_id == category_id).delete(
+            synchronize_session=False,
+        )
+        db.delete(cat)
+        db.commit()
+        return {"ok": True}
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Kunne ikke slette kategori.")
 
 
 @router.post("/{category_id}/rules")

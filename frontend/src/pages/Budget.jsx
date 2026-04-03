@@ -1,18 +1,19 @@
 import { useEffect, useState } from 'react'
-import { budgets as budgetApi, categories as catApi } from '../utils/api'
-import { formatNOK, formatMonth, currentMonth } from '../utils/format'
+import { budgets as budgetApi } from '../utils/api'
+import { formatNOK, formatMonth } from '../utils/format'
+
+function previousMonth() {
+  const d = new Date()
+  d.setMonth(d.getMonth() - 1)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
 
 export default function Budget() {
-  const [month, setMonth] = useState(currentMonth())
+  const [month, setMonth] = useState(previousMonth())
   const [items, setItems] = useState([])
-  const [categories, setCategories] = useState([])
   const [editId, setEditId] = useState(null)
   const [editAmount, setEditAmount] = useState('')
   const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    catApi.list().then(setCategories)
-  }, [])
 
   useEffect(() => {
     setLoading(true)
