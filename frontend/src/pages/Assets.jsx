@@ -5,7 +5,7 @@ import {
 } from 'recharts'
 import { assets as assetApi } from '../utils/api'
 import { formatNOK, formatDate } from '../utils/format'
-import { Clock3, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { ArrowUpCircle, Check, Clock3, Pencil, Plus, Trash2, X } from 'lucide-react'
 
 const ASSET_TYPES = [
   { value: 'bank', label: 'Bankkonto', emoji: '🏦' },
@@ -17,6 +17,7 @@ const ASSET_TYPES = [
 
 const emptyNewForm = () => ({
   name: '',
+  entry_kind: 'asset',
   asset_type: 'bank',
   value: '',
   recorded_date: new Date().toISOString().split('T')[0],
@@ -61,6 +62,12 @@ function snapshotValueForSave(asset, rawValue) {
   const parsed = parseFloat(rawValue)
   if (Number.isNaN(parsed)) return null
   return asset.value < 0 ? -Math.abs(parsed) : Math.abs(parsed)
+}
+
+function valueForNewEntry(rawValue, entryKind) {
+  const parsed = parseFloat(rawValue)
+  if (Number.isNaN(parsed)) return null
+  return entryKind === 'debt' ? -Math.abs(parsed) : Math.abs(parsed)
 }
 
 function buildHistoryMap(items) {
@@ -146,7 +153,18 @@ export default function Assets() {
     setSaving(true)
     setErrorMsg('')
     try {
-      await assetApi.record({ ...form, value: parseFloat(form.value) })
+      const nextValue = valueForNewEntry(form.value, form.entry_kind)
+      if (nextValue === null) {
+        setErrorMsg('Legg inn et gyldig beløp.')
+        return
+      }
+      await assetApi.record({
+        name: form.name,
+        asset_type: form.asset_type,
+        value: nextValue,
+        recorded_date: form.recorded_date,
+        notes: form.notes,
+      })
       await load()
       setShowForm(false)
       setForm(emptyNewForm())
@@ -267,14 +285,8 @@ export default function Assets() {
 
   return (
     <div className="p-8">
-      <div className="flex items-center justify-between mb-6">
+      <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Formue</h1>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700"
-        >
-          <Plus size={16} /> Registrer verdi
-        </button>
       </div>
 
       {errorMsg && (
@@ -364,12 +376,39 @@ export default function Assets() {
 
       {showForm && (
         <form onSubmit={handleSubmit} className="bg-white rounded-xl border border-gray-200 p-6 mb-6 grid grid-cols-2 gap-4">
+          <div className="col-span-2">
+            <label className="block text-xs font-medium text-gray-600 mb-2">Hva vil du registrere?</label>
+            <div className="inline-flex rounded-xl border border-gray-200 bg-gray-50 p-1">
+              <button
+                type="button"
+                onClick={() => setForm(current => ({ ...current, entry_kind: 'asset' }))}
+                className={`px-4 py-2 text-sm rounded-lg transition-colors ${
+                  form.entry_kind === 'asset'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-800'
+                }`}
+              >
+                Eiendel
+              </button>
+              <button
+                type="button"
+                onClick={() => setForm(current => ({ ...current, entry_kind: 'debt' }))}
+                className={`px-4 py-2 text-sm rounded-lg transition-colors ${
+                  form.entry_kind === 'debt'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-800'
+                }`}
+              >
+                Gjeld
+              </button>
+            </div>
+          </div>
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Navn</label>
             <input
               required
               type="text"
-              placeholder="f.eks. DNB BSU"
+              placeholder={form.entry_kind === 'debt' ? 'f.eks. Boliglån' : 'f.eks. DNB BSU'}
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
               value={form.name}
               onChange={e => setForm(current => ({ ...current, name: e.target.value }))}
@@ -388,16 +427,24 @@ export default function Assets() {
             </select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Verdi (kr)</label>
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              {form.entry_kind === 'debt' ? 'Beløp (kr)' : 'Verdi (kr)'}
+            </label>
             <input
               required
               type="number"
+              min="0"
               step="0.01"
               placeholder="0"
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
               value={form.value}
               onChange={e => setForm(current => ({ ...current, value: e.target.value }))}
             />
+            <p className="text-xs text-gray-400 mt-1">
+              {form.entry_kind === 'debt'
+                ? 'Registreres automatisk som gjeld og vises under Gjeld.'
+                : 'Registreres som eiendel og vises under Eiendeler.'}
+            </p>
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Dato</label>
@@ -428,6 +475,15 @@ export default function Assets() {
           </div>
         </form>
       )}
+
+      <div className="flex justify-end mb-4">
+        <button
+          onClick={() => setShowForm(!showForm)}
+          className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700"
+        >
+          <Plus size={16} /> Registrer verdi
+        </button>
+      </div>
 
       <AssetTable
         title="Eiendeler"
@@ -629,8 +685,13 @@ function AssetTable({
                           value={snapshotForm.recorded_date}
                           onChange={e => setSnapshotForm(current => ({ ...current, recorded_date: e.target.value }))}
                         />
-                        <button type="button" onClick={() => saveSnapshot(asset)} className="text-green-600 hover:text-green-700 transition-colors">
-                          ✓
+                        <button
+                          type="button"
+                          onClick={() => saveSnapshot(asset)}
+                          className="inline-flex items-center justify-center rounded-full bg-emerald-500 p-2 text-white shadow-sm transition hover:bg-emerald-600"
+                          title="Lagre ny verdi"
+                        >
+                          <Check size={15} />
                         </button>
                         <button type="button" onClick={cancelSnapshot} className="text-gray-400 hover:text-gray-600 transition-colors">
                           <X size={15} />
@@ -647,7 +708,12 @@ function AssetTable({
                       </>
                     ) : (
                       <>
-                        <button type="button" onClick={() => startSnapshot(asset)} className="text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600">
+                        <button
+                          type="button"
+                          onClick={() => startSnapshot(asset)}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-green-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:from-emerald-600 hover:to-green-700 hover:shadow"
+                        >
+                          <ArrowUpCircle size={14} />
                           Oppdater verdi
                         </button>
                         <button type="button" onClick={() => onShowHistory(asset.name)} className="text-gray-300 hover:text-indigo-500 transition-colors" title="Se historikk">
