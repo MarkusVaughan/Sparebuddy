@@ -1,0 +1,4 @@
+ALTER TABLE transaction_splits
+ADD COLUMN IF NOT EXISTS due_date DATE,
+ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
+

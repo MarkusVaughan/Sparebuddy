@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
-import { assets as assetApi } from '../utils/api'
+import { assets as assetApi, users as userApi } from '../utils/api'
 import { formatNOK, formatDate } from '../utils/format'
 import { ArrowUpCircle, Check, Clock3, Pencil, Plus, Trash2, X } from 'lucide-react'
 
@@ -21,11 +21,13 @@ const emptyNewForm = () => ({
   asset_type: 'bank',
   value: '',
   recorded_date: new Date().toISOString().split('T')[0],
+  shared_user_ids: [],
   notes: '',
 })
 
 const emptyEditForm = () => ({
   asset_type: 'bank',
+  shared_user_ids: [],
   notes: '',
 })
 
@@ -54,6 +56,13 @@ const formatYAxis = (value) =>
   : value >= 1_000 ? `${(value / 1_000).toFixed(0)}k`
   : `${value}`
 
+function sortUsers(users) {
+  return [...users].sort((a, b) => {
+    if (Boolean(a.is_trusted) !== Boolean(b.is_trusted)) return a.is_trusted ? -1 : 1
+    return a.name.localeCompare(b.name, 'nb')
+  })
+}
+
 function formatAssetValue(asset, value) {
   return formatNOK(asset.value < 0 ? Math.abs(value) : value)
 }
@@ -72,6 +81,10 @@ function valueForNewEntry(rawValue, entryKind) {
 
 function buildHistoryMap(items) {
   return Object.fromEntries(items)
+}
+
+function historyKey(ownerUserId, name) {
+  return `${ownerUserId}::${name}`
 }
 
 function getDelta(asset, history) {
@@ -111,25 +124,35 @@ export default function Assets() {
   const [editForm, setEditForm] = useState(emptyEditForm())
   const [snapshotName, setSnapshotName] = useState(null)
   const [snapshotForm, setSnapshotForm] = useState(emptySnapshotForm())
-  const [selectedHistoryName, setSelectedHistoryName] = useState(searchParams.get('name'))
+  const [selectedHistoryKey, setSelectedHistoryKey] = useState(searchParams.get('asset') || null)
+  const [users, setUsers] = useState([])
+  const [currentUser, setCurrentUser] = useState(null)
   const [errorMsg, setErrorMsg] = useState('')
   const [form, setForm] = useState(emptyNewForm())
   const [saving, setSaving] = useState(false)
 
   async function load() {
-    const [assetData, netWorthHistory] = await Promise.all([
+    const [assetData, netWorthHistory, userList, me] = await Promise.all([
       assetApi.list(),
       assetApi.netWorthHistory(),
+      userApi.list(),
+      userApi.me(),
     ])
 
-    const uniqueNames = [...new Set(assetData.assets.map(asset => asset.name))]
+    const uniqueNames = [...new Set(assetData.assets.map(asset => historyKey(asset.owner_user_id, asset.name)))]
     const histories = await Promise.all(
-      uniqueNames.map(async (name) => [name, await assetApi.history(name)]),
+      uniqueNames.map(async (key) => {
+        const [ownerUserId, ...parts] = key.split('::')
+        const name = parts.join('::')
+        return [key, await assetApi.history(Number(ownerUserId), name)]
+      }),
     )
 
     setData(assetData)
     setHistory(netWorthHistory)
     setAssetHistories(buildHistoryMap(histories))
+    setUsers(sortUsers(userList.filter(user => user.id !== me.id)))
+    setCurrentUser(me)
   }
 
   useEffect(() => {
@@ -138,9 +161,9 @@ export default function Assets() {
 
   useEffect(() => {
     const params = {}
-    if (selectedHistoryName) params.name = selectedHistoryName
+    if (selectedHistoryKey) params.asset = selectedHistoryKey
     setSearchParams(params, { replace: true })
-  }, [selectedHistoryName, setSearchParams])
+  }, [selectedHistoryKey, setSearchParams])
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -163,6 +186,7 @@ export default function Assets() {
         asset_type: form.asset_type,
         value: nextValue,
         recorded_date: form.recorded_date,
+        shared_user_ids: form.shared_user_ids,
         notes: form.notes,
       })
       await load()
@@ -190,6 +214,7 @@ export default function Assets() {
     setEditId(asset.id)
     setEditForm({
       asset_type: asset.asset_type,
+      shared_user_ids: asset.shared_user_ids || [],
       notes: asset.notes || '',
     })
   }
@@ -204,6 +229,7 @@ export default function Assets() {
     try {
       await assetApi.update(assetId, {
         asset_type: editForm.asset_type,
+        shared_user_ids: editForm.shared_user_ids,
         notes: editForm.notes,
       })
       await load()
@@ -276,8 +302,8 @@ export default function Assets() {
   }
   const filteredChartData = filterChartData(chartData, selectedRange)
 
-  const selectedHistoryAsset = data?.assets.find(asset => asset.name === selectedHistoryName) || null
-  const selectedHistory = selectedHistoryName ? assetHistories[selectedHistoryName] || [] : []
+  const selectedHistoryAsset = data?.assets.find(asset => historyKey(asset.owner_user_id, asset.name) === selectedHistoryKey) || null
+  const selectedHistory = selectedHistoryKey ? assetHistories[selectedHistoryKey] || [] : []
   const selectedChartData = selectedHistory.map(entry => ({
     date: shortDate(entry.date),
     value: Math.round(selectedHistoryAsset?.value < 0 ? Math.abs(entry.value) : entry.value),
@@ -403,6 +429,28 @@ export default function Assets() {
               </button>
             </div>
           </div>
+          {users.length > 0 && (
+            <div className="col-span-2">
+              <label className="block text-xs font-medium text-gray-600 mb-2">Del posten med andre brukere</label>
+              <div className="grid grid-cols-2 gap-2 rounded-xl border border-gray-200 p-3 bg-gray-50">
+                {users.map(user => (
+                  <label key={user.id} className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={form.shared_user_ids.includes(user.id)}
+                      onChange={() => setForm(current => ({
+                        ...current,
+                        shared_user_ids: current.shared_user_ids.includes(user.id)
+                          ? current.shared_user_ids.filter(id => id !== user.id)
+                          : [...current.shared_user_ids, user.id],
+                      }))}
+                    />
+                    <span className="flex-1 text-gray-700">{user.name}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Navn</label>
             <input
@@ -502,8 +550,10 @@ export default function Assets() {
         saveSnapshot={saveSnapshot}
         cancelSnapshot={cancelSnapshot}
         onDelete={handleDelete}
-        onShowHistory={setSelectedHistoryName}
+        onShowHistory={setSelectedHistoryKey}
         assetHistories={assetHistories}
+        users={users}
+        currentUser={currentUser}
       />
 
       {selectedHistoryAsset && (
@@ -511,11 +561,14 @@ export default function Assets() {
           <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-base font-semibold text-gray-800">Historikk: {selectedHistoryAsset.name}</h2>
-              <p className="text-sm text-gray-500">{typeLabel(selectedHistoryAsset.asset_type).emoji} {typeLabel(selectedHistoryAsset.asset_type).label}</p>
+              <p className="text-sm text-gray-500">
+                {typeLabel(selectedHistoryAsset.asset_type).emoji} {typeLabel(selectedHistoryAsset.asset_type).label}
+                {!selectedHistoryAsset.is_shared_view ? '' : ` • Delt av ${selectedHistoryAsset.owner_name}`}
+              </p>
             </div>
             <button
               type="button"
-              onClick={() => setSelectedHistoryName(null)}
+              onClick={() => setSelectedHistoryKey(null)}
               className="text-gray-400 hover:text-gray-600"
             >
               <X size={18} />
@@ -569,8 +622,10 @@ export default function Assets() {
         saveSnapshot={saveSnapshot}
         cancelSnapshot={cancelSnapshot}
         onDelete={handleDelete}
-        onShowHistory={setSelectedHistoryName}
+        onShowHistory={setSelectedHistoryKey}
         assetHistories={assetHistories}
+        users={users}
+        currentUser={currentUser}
       />
     </div>
   )
@@ -595,6 +650,8 @@ function AssetTable({
   onDelete,
   onShowHistory,
   assetHistories,
+  users,
+  currentUser,
 }) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mb-4">
@@ -620,12 +677,24 @@ function AssetTable({
             </tr>
           ) : assets.map(asset => {
             const type = typeLabel(asset.asset_type)
-            const delta = getDelta(asset, assetHistories[asset.name])
+            const delta = getDelta(asset, assetHistories[historyKey(asset.owner_user_id, asset.name)])
             const snapshotEditing = snapshotName === asset.name
 
             return (
               <tr key={asset.id} className="hover:bg-gray-50 align-top">
-                <td className="px-4 py-3 font-medium text-gray-800">{asset.name}</td>
+                <td className="px-4 py-3 font-medium text-gray-800">
+                  <div>{asset.name}</div>
+                  {asset.is_shared_view ? (
+                    <div className="text-xs text-purple-600 mt-1">Delt av {asset.owner_name}</div>
+                  ) : asset.shared_user_ids?.length > 0 ? (
+                    <div className="text-xs text-purple-600 mt-1">
+                      Delt med {(asset.shared_users || []).map((share) => {
+                        const name = users.find(user => user.id === share.user_id)?.name || share.user_id
+                        return share.status === 'pending' ? `${name} (venter)` : name
+                      }).join(', ')}
+                    </div>
+                  ) : null}
+                </td>
                 <td className="px-4 py-3 text-gray-500">
                   {editId === asset.id ? (
                     <select
@@ -658,19 +727,44 @@ function AssetTable({
                 <td className="px-4 py-3 text-gray-500">{formatDate(asset.recorded_date)}</td>
                 <td className="px-4 py-3 text-gray-400 text-xs">
                   {editId === asset.id ? (
-                    <input
-                      type="text"
-                      className="border border-gray-200 rounded-lg px-2 py-1 text-sm w-full min-w-40 text-gray-700 bg-white"
-                      value={editForm.notes}
-                      onChange={e => setEditForm(current => ({ ...current, notes: e.target.value }))}
-                    />
+                    <div className="space-y-2">
+                      <input
+                        type="text"
+                        className="border border-gray-200 rounded-lg px-2 py-1 text-sm w-full min-w-40 text-gray-700 bg-white"
+                        value={editForm.notes}
+                        onChange={e => setEditForm(current => ({ ...current, notes: e.target.value }))}
+                      />
+                      {users.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {users.map(user => (
+                            <label key={user.id} className="inline-flex items-center gap-1 text-xs text-gray-600">
+                              <input
+                                type="checkbox"
+                                checked={editForm.shared_user_ids.includes(user.id)}
+                                onChange={() => setEditForm(current => ({
+                                  ...current,
+                                  shared_user_ids: current.shared_user_ids.includes(user.id)
+                                    ? current.shared_user_ids.filter(id => id !== user.id)
+                                    : [...current.shared_user_ids, user.id],
+                                }))}
+                              />
+                              {user.name}
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   ) : (
                     asset.notes || '—'
                   )}
                 </td>
                 <td className="px-4 py-3 text-right">
                   <div className="flex justify-end items-center gap-2 flex-wrap">
-                    {snapshotEditing ? (
+                    {asset.is_shared_view ? (
+                      <button type="button" onClick={() => onShowHistory(historyKey(asset.owner_user_id, asset.name))} className="text-gray-300 hover:text-indigo-500 transition-colors" title="Se historikk">
+                        <Clock3 size={15} />
+                      </button>
+                    ) : snapshotEditing ? (
                       <>
                         <input
                           type="number"
@@ -716,7 +810,7 @@ function AssetTable({
                           <ArrowUpCircle size={14} />
                           Oppdater verdi
                         </button>
-                        <button type="button" onClick={() => onShowHistory(asset.name)} className="text-gray-300 hover:text-indigo-500 transition-colors" title="Se historikk">
+                        <button type="button" onClick={() => onShowHistory(historyKey(asset.owner_user_id, asset.name))} className="text-gray-300 hover:text-indigo-500 transition-colors" title="Se historikk">
                           <Clock3 size={15} />
                         </button>
                         <button type="button" onClick={() => startEdit(asset)} className="text-gray-300 hover:text-blue-500 transition-colors" title="Rediger type/notat">

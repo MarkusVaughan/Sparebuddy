@@ -1,16 +1,17 @@
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload
 
-from ..database import Asset, Category, Goal, GoalAssetLink, GoalType, get_db
+from ..auth import get_current_user
+from ..database import Asset, Category, Goal, GoalAssetLink, GoalShare, GoalType, ShareStatus, User, get_db
 
 router = APIRouter(prefix="/goals", tags=["goals"])
 
 
 class GoalCreate(BaseModel):
-    user_id: int = 1
     name: str
     goal_type: GoalType = GoalType.savings
     target_amount: float
@@ -21,6 +22,7 @@ class GoalCreate(BaseModel):
     category_id: Optional[int] = None
     linked_asset_names: list[str] = Field(default_factory=list)
     baseline_amount: Optional[float] = None
+    shared_user_ids: list[int] = Field(default_factory=list)
     notes: Optional[str] = None
 
 
@@ -35,6 +37,7 @@ class GoalUpdate(BaseModel):
     category_id: Optional[int] = None
     linked_asset_names: Optional[list[str]] = None
     baseline_amount: Optional[float] = None
+    shared_user_ids: Optional[list[int]] = None
     notes: Optional[str] = None
 
 
@@ -52,11 +55,15 @@ def latest_asset_values_by_name(user_id: int, db: Session):
     return latest_by_name
 
 
-def validate_category(goal_type: GoalType, category_id: Optional[int], db: Session):
+def validate_category(goal_type: GoalType, category_id: Optional[int], user_id: int, db: Session):
     if category_id is None:
         return
 
-    category = db.query(Category).filter(Category.id == category_id).first()
+    category = (
+        db.query(Category)
+        .filter(Category.id == category_id, Category.user_id == user_id)
+        .first()
+    )
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
     if goal_type == GoalType.expense_reduction and category.category_type.value != "expense":
@@ -76,10 +83,21 @@ def validate_asset_links(user_id: int, linked_asset_names: list[str], db: Sessio
     }
     missing = [name for name in linked_asset_names if name not in existing_names]
     if missing:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Assets not found: {', '.join(missing)}",
-        )
+        raise HTTPException(status_code=404, detail=f"Assets not found: {', '.join(missing)}")
+
+
+def validate_shared_users(current_user_id: int, shared_user_ids: list[int], db: Session):
+    if not shared_user_ids:
+        return
+    if current_user_id in shared_user_ids:
+        raise HTTPException(status_code=400, detail="You do not need to share with yourself")
+    existing = {
+        row[0]
+        for row in db.query(User.id).filter(User.id.in_(shared_user_ids)).all()
+    }
+    missing = [str(user_id) for user_id in shared_user_ids if user_id not in existing]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Users not found: {', '.join(missing)}")
 
 
 def compute_goal_progress(goal: Goal, latest_assets: dict[str, float]):
@@ -107,8 +125,10 @@ def compute_goal_progress(goal: Goal, latest_assets: dict[str, float]):
     }
 
 
-def serialize_goal(goal: Goal, latest_assets: dict[str, float]):
+def serialize_goal(goal: Goal, latest_assets: dict[str, float], current_user_id: int):
     computed = compute_goal_progress(goal, latest_assets)
+    visible_shares = [share for share in goal.shares if share.status != ShareStatus.declined]
+    current_user_share = next((share for share in visible_shares if share.user_id == current_user_id), None)
     return {
         "id": goal.id,
         "name": goal.name,
@@ -125,37 +145,101 @@ def serialize_goal(goal: Goal, latest_assets: dict[str, float]):
         "linked_asset_total": computed["linked_asset_total"],
         "linked_debt_balance": computed["linked_debt_balance"],
         "baseline_amount": computed["baseline_amount"],
+        "shared_user_ids": [share.user_id for share in visible_shares],
+        "shared_user_names": [share.user.name for share in visible_shares],
+        "shared_users": [
+            {
+                "user_id": share.user_id,
+                "name": share.user.name if share.user else None,
+                "status": share.status.value,
+            }
+            for share in visible_shares
+        ],
+        "owner_user_id": goal.user_id,
+        "owner_name": goal.user.name if goal.user else None,
+        "is_owner": goal.user_id == current_user_id,
+        "share_id": current_user_share.id if current_user_share else None,
         "notes": goal.notes,
     }
 
 
+def sync_asset_links(goal: Goal, linked_asset_names: list[str], db: Session):
+    existing_links = {link.asset_name: link for link in goal.asset_links}
+    for link in list(goal.asset_links):
+        if link.asset_name not in linked_asset_names:
+            db.delete(link)
+    for asset_name in linked_asset_names:
+        if asset_name not in existing_links:
+            db.add(GoalAssetLink(goal_id=goal.id, asset_name=asset_name))
+
+
+def sync_goal_shares(goal: Goal, shared_user_ids: list[int], db: Session):
+    existing_shares = {share.user_id: share for share in goal.shares}
+    for share in list(goal.shares):
+        if share.user_id not in shared_user_ids:
+            db.delete(share)
+    for user_id in shared_user_ids:
+        if user_id not in existing_shares:
+            db.add(GoalShare(
+                goal_id=goal.id,
+                user_id=user_id,
+                status=ShareStatus.pending,
+                decline_message=None,
+                responded_at=None,
+            ))
+        else:
+            share = existing_shares[user_id]
+            if share.status == ShareStatus.declined:
+                share.status = ShareStatus.pending
+                share.decline_message = None
+                share.responded_at = None
+
+
 @router.get("/")
-def list_goals(user_id: int = 1, db: Session = Depends(get_db)):
+def list_goals(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     goals = (
         db.query(Goal)
-        .options(joinedload(Goal.category), joinedload(Goal.asset_links))
-        .filter(Goal.user_id == user_id)
+        .options(
+            joinedload(Goal.category),
+            joinedload(Goal.asset_links),
+            joinedload(Goal.shares).joinedload(GoalShare.user),
+            joinedload(Goal.user),
+        )
+        .outerjoin(GoalShare, GoalShare.goal_id == Goal.id)
+        .filter(
+            (Goal.user_id == current_user.id)
+            | ((GoalShare.user_id == current_user.id) & (GoalShare.status == ShareStatus.accepted))
+        )
         .order_by(Goal.target_month.asc(), Goal.created_at.asc())
         .all()
     )
-    latest_assets = latest_asset_values_by_name(user_id, db)
-    return [serialize_goal(goal, latest_assets) for goal in goals]
+    latest_assets_by_owner = {}
+    serialized = []
+    seen_goal_ids = set()
+    for goal in goals:
+        if goal.id in seen_goal_ids:
+            continue
+        seen_goal_ids.add(goal.id)
+        latest_assets = latest_assets_by_owner.setdefault(goal.user_id, latest_asset_values_by_name(goal.user_id, db))
+        serialized.append(serialize_goal(goal, latest_assets, current_user.id))
+    return serialized
 
 
 @router.post("/")
-def create_goal(payload: GoalCreate, db: Session = Depends(get_db)):
-    validate_category(payload.goal_type, payload.category_id, db)
-    validate_asset_links(payload.user_id, payload.linked_asset_names, db)
+def create_goal(payload: GoalCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    validate_category(payload.goal_type, payload.category_id, current_user.id, db)
+    validate_asset_links(current_user.id, payload.linked_asset_names, db)
+    validate_shared_users(current_user.id, payload.shared_user_ids, db)
 
     baseline_amount = payload.baseline_amount
     if payload.goal_type == GoalType.debt_reduction and payload.linked_asset_names and baseline_amount is None:
-        latest_assets = latest_asset_values_by_name(payload.user_id, db)
+        latest_assets = latest_asset_values_by_name(current_user.id, db)
         baseline_amount = abs(
             sum(latest_assets.get(name, 0) for name in payload.linked_asset_names if latest_assets.get(name, 0) < 0)
         )
 
     goal = Goal(
-        user_id=payload.user_id,
+        user_id=current_user.id,
         name=payload.name,
         goal_type=payload.goal_type.value,
         target_amount=payload.target_amount,
@@ -169,21 +253,19 @@ def create_goal(payload: GoalCreate, db: Session = Depends(get_db)):
     )
     db.add(goal)
     db.flush()
-
-    for asset_name in payload.linked_asset_names:
-        db.add(GoalAssetLink(goal_id=goal.id, asset_name=asset_name))
-
+    sync_asset_links(goal, payload.linked_asset_names, db)
+    sync_goal_shares(goal, payload.shared_user_ids, db)
     db.commit()
     db.refresh(goal)
     return {"id": goal.id}
 
 
 @router.patch("/{goal_id}")
-def update_goal(goal_id: int, payload: GoalUpdate, db: Session = Depends(get_db)):
+def update_goal(goal_id: int, payload: GoalUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     goal = (
         db.query(Goal)
-        .options(joinedload(Goal.asset_links))
-        .filter(Goal.id == goal_id)
+        .options(joinedload(Goal.asset_links), joinedload(Goal.shares))
+        .filter(Goal.id == goal_id, Goal.user_id == current_user.id)
         .first()
     )
     if not goal:
@@ -193,39 +275,38 @@ def update_goal(goal_id: int, payload: GoalUpdate, db: Session = Depends(get_db)
     goal_type = updates.get("goal_type", GoalType(goal.goal_type))
     category_id = updates.get("category_id", goal.category_id)
     linked_asset_names = updates.pop("linked_asset_names", None)
+    shared_user_ids = updates.pop("shared_user_ids", None)
 
-    validate_category(goal_type, category_id, db)
+    validate_category(goal_type, category_id, current_user.id, db)
     if linked_asset_names is not None:
         validate_asset_links(goal.user_id, linked_asset_names, db)
+    if shared_user_ids is not None:
+        validate_shared_users(current_user.id, shared_user_ids, db)
 
     for key, value in updates.items():
         if key == "goal_type":
             setattr(goal, key, value.value)
-            continue
-        setattr(goal, key, value)
+        else:
+            setattr(goal, key, value)
 
     if linked_asset_names is not None:
-        existing_links = {link.asset_name: link for link in goal.asset_links}
-        for link in list(goal.asset_links):
-            if link.asset_name not in linked_asset_names:
-                db.delete(link)
-        for asset_name in linked_asset_names:
-            if asset_name not in existing_links:
-                db.add(GoalAssetLink(goal_id=goal.id, asset_name=asset_name))
-
+        sync_asset_links(goal, linked_asset_names, db)
         if goal.goal_type == GoalType.debt_reduction.value and "baseline_amount" not in updates:
             latest_assets = latest_asset_values_by_name(goal.user_id, db)
             goal.baseline_amount = abs(
                 sum(latest_assets.get(name, 0) for name in linked_asset_names if latest_assets.get(name, 0) < 0)
             )
 
+    if shared_user_ids is not None:
+        sync_goal_shares(goal, shared_user_ids, db)
+
     db.commit()
     return {"ok": True}
 
 
 @router.delete("/{goal_id}")
-def delete_goal(goal_id: int, db: Session = Depends(get_db)):
-    goal = db.query(Goal).filter(Goal.id == goal_id).first()
+def delete_goal(goal_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    goal = db.query(Goal).filter(Goal.id == goal_id, Goal.user_id == current_user.id).first()
     if not goal:
         raise HTTPException(status_code=404, detail="Goal not found")
     db.delete(goal)

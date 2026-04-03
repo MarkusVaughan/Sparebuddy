@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { assets as assetApi, categories as categoryApi, goals as goalApi } from '../utils/api'
+import { assets as assetApi, categories as categoryApi, goals as goalApi, users as userApi } from '../utils/api'
 import { formatMonth, formatNOK } from '../utils/format'
-import { Plus, Target, Trash2 } from 'lucide-react'
+import { Pencil, Plus, Target, Trash2 } from 'lucide-react'
 
 const GOAL_TYPES = [
   { value: 'savings', label: 'Sparemål' },
@@ -38,12 +38,20 @@ function defaultForm() {
     target_month: addMonths(startMonth, 3),
     category_id: '',
     linked_asset_names: [],
+    shared_user_ids: [],
     notes: '',
   }
 }
 
 function goalTypeLabel(goalType) {
   return GOAL_TYPES.find(goal => goal.value === goalType)?.label || goalType
+}
+
+function sortUsers(users) {
+  return [...users].sort((a, b) => {
+    if (Boolean(a.is_trusted) !== Boolean(b.is_trusted)) return a.is_trusted ? -1 : 1
+    return a.name.localeCompare(b.name, 'nb')
+  })
 }
 
 function labelsFor(goalType) {
@@ -75,11 +83,15 @@ export default function Goals() {
   const [items, setItems] = useState([])
   const [categories, setCategories] = useState([])
   const [assets, setAssets] = useState([])
+  const [users, setUsers] = useState([])
+  const [currentUser, setCurrentUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState(defaultForm())
+  const [shareSearch, setShareSearch] = useState('')
+  const [editingGoalId, setEditingGoalId] = useState(null)
 
   const load = () => {
     setLoading(true)
@@ -87,10 +99,14 @@ export default function Goals() {
       goalApi.list(),
       categoryApi.list(),
       assetApi.list(),
-    ]).then(([goals, cats, assetResponse]) => {
+      userApi.list(),
+      userApi.me(),
+    ]).then(([goals, cats, assetResponse, userList, me]) => {
       setItems(goals)
       setCategories(cats.filter(cat => cat.category_type === 'expense'))
       setAssets(assetResponse.assets || [])
+      setUsers(sortUsers(userList.filter(user => user.id !== me.id)))
+      setCurrentUser(me)
     }).finally(() => setLoading(false))
   }
 
@@ -98,24 +114,34 @@ export default function Goals() {
     load()
   }, [])
 
-  async function handleCreate(e) {
+  async function handleSubmit(e) {
     e.preventDefault()
     setSaving(true)
     setErrorMsg('')
     try {
-      await goalApi.create({
+      const payload = {
         ...form,
         target_amount: parseFloat(form.target_amount),
         current_amount: parseFloat(form.current_amount || '0'),
         monthly_target: form.monthly_target ? parseFloat(form.monthly_target) : null,
         category_id: form.goal_type === 'expense_reduction' && form.category_id ? Number(form.category_id) : null,
         linked_asset_names: form.goal_type !== 'expense_reduction' ? form.linked_asset_names : [],
-      })
+        shared_user_ids: form.shared_user_ids,
+      }
+
+      if (editingGoalId) {
+        await goalApi.update(editingGoalId, payload)
+      } else {
+        await goalApi.create(payload)
+      }
+
       setForm(defaultForm())
+      setShareSearch('')
+      setEditingGoalId(null)
       setShowForm(false)
       await load()
     } catch (error) {
-      setErrorMsg(error?.response?.data?.detail || 'Kunne ikke lagre mål.')
+      setErrorMsg(error?.response?.data?.detail || (editingGoalId ? 'Kunne ikke oppdatere mål.' : 'Kunne ikke lagre mål.'))
     } finally {
       setSaving(false)
     }
@@ -148,6 +174,15 @@ export default function Goals() {
   const totalProgress = items.reduce((sum, item) => sum + item.current_amount, 0)
   const activeLabels = labelsFor(form.goal_type)
   const usesAssetTracking = form.goal_type === 'savings' || form.goal_type === 'debt_reduction'
+  const suggestedShareUserIds = [...new Set(items.flatMap(item => item.shared_user_ids || []))]
+  const suggestedUsers = users.filter(user => suggestedShareUserIds.includes(user.id))
+  const searchableUsers = users.filter(user => !suggestedShareUserIds.includes(user.id))
+  const normalizedShareSearch = shareSearch.trim().toLowerCase()
+  const searchedUsers = normalizedShareSearch
+    ? searchableUsers.filter(user =>
+        user.name.toLowerCase().includes(normalizedShareSearch)
+        || user.email.toLowerCase().includes(normalizedShareSearch))
+    : []
 
   function toggleLinkedAsset(assetName) {
     setForm(current => {
@@ -161,6 +196,44 @@ export default function Goals() {
     })
   }
 
+  function toggleSharedUser(userId) {
+    setForm(current => {
+      const alreadySelected = current.shared_user_ids.includes(userId)
+      return {
+        ...current,
+        shared_user_ids: alreadySelected
+          ? current.shared_user_ids.filter(id => id !== userId)
+          : [...current.shared_user_ids, userId],
+      }
+    })
+  }
+
+  function startEdit(goal) {
+    setEditingGoalId(goal.id)
+    setShareSearch('')
+    setForm({
+      name: goal.name,
+      goal_type: goal.goal_type,
+      target_amount: String(goal.target_amount),
+      current_amount: String(goal.manual_current_amount ?? goal.current_amount ?? 0),
+      monthly_target: goal.monthly_target != null ? String(goal.monthly_target) : '',
+      start_month: goal.start_month,
+      target_month: goal.target_month,
+      category_id: goal.category_id ? String(goal.category_id) : '',
+      linked_asset_names: goal.linked_asset_names || [],
+      shared_user_ids: goal.shared_user_ids || [],
+      notes: goal.notes || '',
+    })
+    setShowForm(true)
+  }
+
+  function cancelForm() {
+    setForm(defaultForm())
+    setShareSearch('')
+    setEditingGoalId(null)
+    setShowForm(false)
+  }
+
   return (
     <div className="p-8">
       <div className="flex items-center justify-between mb-6">
@@ -169,7 +242,16 @@ export default function Goals() {
           <p className="text-sm text-gray-500">Sparemål, gjeldsmål og mål for å redusere utgifter</p>
         </div>
         <button
-          onClick={() => setShowForm(v => !v)}
+          onClick={() => {
+            if (showForm && !editingGoalId) {
+              cancelForm()
+              return
+            }
+            setEditingGoalId(null)
+            setForm(defaultForm())
+            setShareSearch('')
+            setShowForm(true)
+          }}
           className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700"
         >
           <Plus size={16} /> Nytt mål
@@ -189,7 +271,7 @@ export default function Goals() {
       </div>
 
       {showForm && (
-        <form onSubmit={handleCreate} className="bg-white rounded-xl border border-gray-200 p-6 mb-6 grid grid-cols-2 gap-4">
+        <form onSubmit={handleSubmit} className="bg-white rounded-xl border border-gray-200 p-6 mb-6 grid grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Måltype</label>
             <select
@@ -255,6 +337,60 @@ export default function Goals() {
               <p className="text-xs text-gray-400 mt-2">
                 Sparemål henter fremdrift fra valgt konto. Gjeldsmål bruker valgt gjeld som grunnlag og måler nedbetaling automatisk.
               </p>
+            </div>
+          )}
+          {users.length > 0 && (
+            <div className="col-span-2">
+              <label className="block text-xs font-medium text-gray-600 mb-2">Del målet med andre brukere</label>
+              <div className="rounded-xl border border-gray-200 p-3 bg-gray-50 space-y-3">
+                {suggestedUsers.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 mb-2">Foreslått basert på tidligere deling</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {suggestedUsers.map(user => (
+                        <label key={user.id} className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={form.shared_user_ids.includes(user.id)}
+                            onChange={() => toggleSharedUser(user.id)}
+                          />
+                          <span className="flex-1 text-gray-700">{user.name}</span>
+                          <span className="text-xs text-gray-400">{user.email}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-2">Søk etter annen bruker</label>
+                  <input
+                    type="text"
+                    placeholder="Søk på navn eller e-post..."
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white"
+                    value={shareSearch}
+                    onChange={e => setShareSearch(e.target.value)}
+                  />
+                </div>
+
+                {normalizedShareSearch && (
+                  <div className="grid grid-cols-2 gap-2">
+                    {searchedUsers.length === 0 ? (
+                      <p className="text-sm text-gray-400">Ingen brukere funnet.</p>
+                    ) : searchedUsers.map(user => (
+                      <label key={user.id} className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={form.shared_user_ids.includes(user.id)}
+                          onChange={() => toggleSharedUser(user.id)}
+                        />
+                        <span className="flex-1 text-gray-700">{user.name}</span>
+                        <span className="text-xs text-gray-400">{user.email}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
           <div>
@@ -327,7 +463,7 @@ export default function Goals() {
           <div className="col-span-2 flex gap-2 justify-end">
             <button
               type="button"
-              onClick={() => setShowForm(false)}
+              onClick={cancelForm}
               className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50"
             >
               Avbryt
@@ -337,7 +473,7 @@ export default function Goals() {
               disabled={saving}
               className="px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
             >
-              {saving ? 'Lagrer...' : 'Lagre mål'}
+              {saving ? 'Lagrer...' : editingGoalId ? 'Lagre endringer' : 'Lagre mål'}
             </button>
           </div>
         </form>
@@ -382,6 +518,16 @@ export default function Goals() {
                         {assetName}
                       </span>
                     ))}
+                    {item.shared_users?.map(share => (
+                      <span key={share.user_id} className="text-xs bg-purple-50 text-purple-700 px-2 py-1 rounded-full">
+                        Delt med {share.name}{share.status === 'pending' ? ' (venter)' : ''}
+                      </span>
+                    ))}
+                    {!item.is_owner && (
+                      <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full">
+                        Delt av {item.owner_name}
+                      </span>
+                    )}
                   </div>
                   <p className="text-sm text-gray-500">
                     {formatMonth(item.start_month)} til {formatMonth(item.target_month)}
@@ -390,12 +536,25 @@ export default function Goals() {
                     <p className="text-sm text-gray-400 mt-1">{item.notes}</p>
                   )}
                 </div>
-                <button
-                  onClick={() => handleDelete(item.id)}
-                  className="text-gray-300 hover:text-red-500 transition-colors"
-                >
-                  <Trash2 size={16} />
-                </button>
+                <div className="flex items-center gap-2">
+                  {item.is_owner && (
+                    <button
+                      type="button"
+                      onClick={() => startEdit(item)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
+                    >
+                      <Pencil size={13} />
+                      Juster
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleDelete(item.id)}
+                    disabled={!item.is_owner}
+                    className="text-gray-300 hover:text-red-500 transition-colors disabled:opacity-30"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-3 gap-4 mb-4">
@@ -436,7 +595,7 @@ export default function Goals() {
                 </div>
               </div>
 
-              {item.linked_asset_names?.length > 0 && item.goal_type !== 'expense_reduction' ? null : (
+              {(!item.is_owner || (item.linked_asset_names?.length > 0 && item.goal_type !== 'expense_reduction')) ? null : (
                 <div className="flex items-end gap-3 flex-wrap">
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">{itemLabels.progress}</label>

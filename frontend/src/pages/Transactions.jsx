@@ -1,15 +1,37 @@
 import { useEffect, useState, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { transactions as txApi, accounts as accApi, categories as catApi } from '../utils/api'
+import { transactions as txApi, accounts as accApi, categories as catApi, users as userApi } from '../utils/api'
 import { Plus } from 'lucide-react'
 import { formatNOK, formatDate, currentMonth } from '../utils/format'
 import { Upload, RefreshCw, Search } from 'lucide-react'
+
+function sortUsers(users) {
+  return [...users].sort((a, b) => {
+    if (Boolean(a.is_trusted) !== Boolean(b.is_trusted)) return a.is_trusted ? -1 : 1
+    return a.name.localeCompare(b.name, 'nb')
+  })
+}
+
+function defaultDueDate(dateString) {
+  const date = new Date(dateString)
+  date.setDate(date.getDate() + 14)
+  return date.toISOString().slice(0, 10)
+}
+
+function settlementTone(status) {
+  if (status === 'paid') return 'text-green-700 bg-green-50'
+  if (status === 'awaiting_approval') return 'text-blue-700 bg-blue-50'
+  if (status === 'overdue') return 'text-red-700 bg-red-50'
+  return 'text-yellow-800 bg-yellow-50'
+}
 
 export default function Transactions() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [txs, setTxs] = useState([])
   const [accounts, setAccounts] = useState([])
   const [categories, setCategories] = useState([])
+  const [users, setUsers] = useState([])
+  const [currentUser, setCurrentUser] = useState(null)
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [importing, setImporting] = useState(false)
@@ -26,12 +48,17 @@ export default function Transactions() {
   const [selectedAccount, setSelectedAccount] = useState('')
   const [showNewAccount, setShowNewAccount] = useState(false)
   const [newAccount, setNewAccount] = useState({ name: '', bank: 'DNB', account_type: 'checking' })
+  const [splitDrafts, setSplitDrafts] = useState({})
+  const [shareOpenByTx, setShareOpenByTx] = useState({})
+  const [shareSearchByTx, setShareSearchByTx] = useState({})
   const fileRef = useRef()
 
   useEffect(() => {
-    Promise.all([accApi.list(), catApi.list()]).then(([a, c]) => {
+    Promise.all([accApi.list(), catApi.list(), userApi.list(), userApi.me()]).then(([a, c, userList, me]) => {
       setAccounts(a)
       setCategories(c)
+      setUsers(sortUsers(userList.filter(user => user.id !== me.id)))
+      setCurrentUser(me)
     })
   }, [])
 
@@ -49,6 +76,34 @@ export default function Transactions() {
       setTotal(data.total)
     }).finally(() => setLoading(false))
   }, [filters])
+
+  useEffect(() => {
+    setSplitDrafts(prev => {
+      const next = { ...prev }
+      txs.forEach(tx => {
+        next[tx.id] = next[tx.id] || {
+          participant_user_id: tx.split?.participant_user_id ? String(tx.split.participant_user_id) : '',
+          share_percent: tx.split?.share_percent ? String(tx.split.share_percent) : '50',
+          due_date: tx.split?.due_date || defaultDueDate(tx.date),
+        }
+      })
+      return next
+    })
+  }, [txs])
+
+  useEffect(() => {
+    setShareOpenByTx(prev => {
+      const next = { ...prev }
+      txs.forEach(tx => {
+        if (tx.split) {
+          next[tx.id] = true
+        } else if (!(tx.id in next)) {
+          next[tx.id] = false
+        }
+      })
+      return next
+    })
+  }, [txs])
 
   useEffect(() => {
     const params = {}
@@ -110,6 +165,62 @@ export default function Transactions() {
     setSelectedAccount(String(created.id))
     setNewAccount({ name: '', bank: 'DNB', account_type: 'checking' })
     setShowNewAccount(false)
+  }
+
+  function updateSplitDraft(txId, patch) {
+    setSplitDrafts(current => ({
+      ...current,
+      [txId]: {
+        ...(current[txId] || {}),
+        ...patch,
+      },
+    }))
+  }
+
+  async function saveSplit(tx) {
+    const draft = splitDrafts[tx.id] || {}
+    const userId = draft.participant_user_id ? Number(draft.participant_user_id) : null
+    const sharePercent = Number(draft.share_percent || '50')
+    await txApi.setSplit(tx.id, {
+      participant_user_id: userId,
+      share_ratio: sharePercent / 100,
+      due_date: draft.due_date || null,
+      note: 'Halvpart av fellesutgift',
+    })
+    setFilters(f => ({ ...f }))
+  }
+
+  async function setShareEnabled(tx, enabled) {
+    if (!enabled) {
+      updateSplitDraft(tx.id, { participant_user_id: '' })
+      setShareOpenByTx(current => ({ ...current, [tx.id]: false }))
+      if (tx.split?.id) {
+        await txApi.setSplit(tx.id, { participant_user_id: null, share_ratio: 0.5, note: null })
+        setFilters(f => ({ ...f }))
+      }
+      return
+    }
+    setShareOpenByTx(current => ({ ...current, [tx.id]: true }))
+  }
+
+  async function togglePaid(splitId, paid) {
+    await txApi.updateSplit(splitId, { paid })
+    setFilters(f => ({ ...f }))
+  }
+
+  const previousSharedUserIds = [...new Set(
+    txs
+      .map(tx => tx.split?.participant_user_id)
+      .filter(Boolean),
+  )]
+  const suggestedUsers = users.filter(user => previousSharedUserIds.includes(user.id))
+
+  function searchedUsers(txId) {
+    const query = (shareSearchByTx[txId] || '').trim().toLowerCase()
+    if (!query) return []
+    return users.filter(user =>
+      user.name.toLowerCase().includes(query) || user.email.toLowerCase().includes(query),
+    )
   }
 
   return (
@@ -256,14 +367,15 @@ export default function Transactions() {
               <th className="px-4 py-3 text-left">Beskrivelse</th>
               <th className="px-4 py-3 text-left">Konto</th>
               <th className="px-4 py-3 text-right">Beløp</th>
-              <th className="px-4 py-3 text-left">Kategori</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50">
-            {loading ? (
-              <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">Laster...</td></tr>
+          <th className="px-4 py-3 text-left">Kategori</th>
+          <th className="px-4 py-3 text-left">Deling</th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-gray-50">
+        {loading ? (
+              <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">Laster...</td></tr>
             ) : txs.length === 0 ? (
-              <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">
+              <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">
                 Ingen transaksjoner funnet. Importer en DNB CSV-fil for å komme i gang.
               </td></tr>
             ) : txs.map(tx => (
@@ -287,6 +399,185 @@ export default function Transactions() {
                       <option key={c.id} value={c.id}>{c.icon} {c.name}</option>
                     ))}
                   </select>
+                </td>
+                <td className="px-4 py-3">
+                  {tx.shared_role === 'participant' ? (
+                    <div className="space-y-2 text-xs">
+                      <div className="text-purple-700">
+                        Skylder {tx.split?.owner_name} {formatNOK(tx.split?.settlement_amount || 0)}
+                      </div>
+                          {tx.split?.settlement_status && (
+                            <span className={`inline-flex rounded-full px-2 py-1 font-medium ${settlementTone(tx.split.settlement_status)}`}>
+                              {tx.split.settlement_status === 'paid'
+                                ? 'Betalt'
+                                : tx.split.settlement_status === 'awaiting_approval'
+                                  ? 'Venter på godkjenning'
+                                  : tx.split.settlement_status === 'overdue'
+                                    ? 'Forfalt'
+                                    : 'Ubetalt'}
+                            </span>
+                          )}
+                      {tx.split?.due_date && (
+                        <div className="text-gray-500">Frist {formatDate(tx.split.due_date)}</div>
+                      )}
+                          {tx.split?.id && (
+                            <button
+                              type="button"
+                              onClick={() => togglePaid(tx.split.id, tx.split.settlement_status !== 'paid')}
+                              className="rounded-md border border-gray-200 px-2 py-1 text-gray-600 hover:bg-gray-50"
+                            >
+                              {tx.split.settlement_status === 'paid'
+                                ? 'Marker som ubetalt'
+                                : tx.split.settlement_status === 'awaiting_approval'
+                                  ? 'Trekk tilbake melding'
+                                  : 'Meld som betalt'}
+                            </button>
+                          )}
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      {!shareOpenByTx[tx.id] ? (
+                        <button
+                          type="button"
+                          onClick={() => setShareEnabled(tx, true)}
+                          className="rounded-md border border-gray-200 px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+                        >
+                          Del
+                        </button>
+                      ) : (
+                        <div className="space-y-2 rounded-lg border border-gray-200 bg-gray-50 p-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-medium text-gray-600">Delt</span>
+                            <button
+                              type="button"
+                              onClick={() => setShareEnabled(tx, false)}
+                              className="text-xs text-gray-500 hover:text-gray-700"
+                            >
+                              Ikke delt
+                            </button>
+                          </div>
+
+                          {suggestedUsers.length > 0 && (
+                            <div className="space-y-1">
+                              <p className="text-[11px] uppercase tracking-wide text-gray-400">Tidligere delt med</p>
+                              <div className="flex flex-wrap gap-1.5">
+                                {suggestedUsers.map(user => (
+                                  <button
+                                    key={user.id}
+                                    type="button"
+                                    onClick={() => updateSplitDraft(tx.id, { participant_user_id: String(user.id) })}
+                                    className={`rounded-full px-2.5 py-1 text-xs border ${
+                                      String(user.id) === (splitDrafts[tx.id]?.participant_user_id || '')
+                                        ? 'border-green-600 bg-green-50 text-green-700'
+                                        : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-100'
+                                    }`}
+                                  >
+                                    {user.name}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="space-y-1">
+                            <p className="text-[11px] uppercase tracking-wide text-gray-400">Søk etter bruker</p>
+                            <input
+                              type="text"
+                              placeholder="Søk på navn eller e-post"
+                              className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-xs bg-white"
+                              value={shareSearchByTx[tx.id] || ''}
+                              onChange={e => setShareSearchByTx(current => ({ ...current, [tx.id]: e.target.value }))}
+                            />
+                            {(shareSearchByTx[tx.id] || '').trim() !== '' && (
+                              <div className="flex flex-wrap gap-1.5">
+                                {searchedUsers(tx.id).length === 0 ? (
+                                  <span className="text-xs text-gray-400">Ingen treff</span>
+                                ) : searchedUsers(tx.id).map(user => (
+                                  <button
+                                    key={user.id}
+                                    type="button"
+                                    onClick={() => updateSplitDraft(tx.id, { participant_user_id: String(user.id) })}
+                                    className={`rounded-full px-2.5 py-1 text-xs border ${
+                                      String(user.id) === (splitDrafts[tx.id]?.participant_user_id || '')
+                                        ? 'border-green-600 bg-green-50 text-green-700'
+                                        : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-100'
+                                    }`}
+                                  >
+                                    {user.name}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {splitDrafts[tx.id]?.participant_user_id && (
+                            <>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max="100"
+                                  className="border border-gray-200 rounded-md px-2 py-1 text-xs w-20 bg-white"
+                                  value={splitDrafts[tx.id]?.share_percent || '50'}
+                                  onChange={e => updateSplitDraft(tx.id, { share_percent: e.target.value })}
+                                />
+                                <span className="text-xs text-gray-500">% andel</span>
+                              </div>
+                              <input
+                                type="date"
+                                className="border border-gray-200 rounded-md px-2 py-1 text-xs w-36 bg-white"
+                                value={splitDrafts[tx.id]?.due_date || defaultDueDate(tx.date)}
+                                onChange={e => updateSplitDraft(tx.id, { due_date: e.target.value })}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => saveSplit(tx)}
+                                className="rounded-md bg-gray-900 px-2 py-1 text-xs text-white hover:bg-gray-800"
+                              >
+                                Lagre
+                              </button>
+                            </>
+                          )}
+
+                          {tx.split && (
+                            <div className="text-xs text-purple-700 space-y-1 pt-1">
+                              <div>
+                                {tx.split.participant_name} skylder {formatNOK(tx.split.settlement_amount || 0)}
+                                {tx.split.status === 'pending' ? ' · Venter på svar' : ''}
+                              </div>
+                              {tx.split.settlement_status && tx.split.status === 'accepted' && (
+                                <span className={`inline-flex rounded-full px-2 py-1 font-medium ${settlementTone(tx.split.settlement_status)}`}>
+                                  {tx.split.settlement_status === 'paid'
+                                    ? 'Betalt'
+                                    : tx.split.settlement_status === 'awaiting_approval'
+                                      ? 'Venter på godkjenning'
+                                      : tx.split.settlement_status === 'overdue'
+                                        ? 'Forfalt'
+                                        : 'Ubetalt'}
+                                </span>
+                              )}
+                              {tx.split?.due_date && tx.split.status === 'accepted' && (
+                                <div className="text-gray-500">Frist {formatDate(tx.split.due_date)}</div>
+                              )}
+                              {tx.split?.id && tx.split.status === 'accepted' && (
+                                <button
+                                  type="button"
+                                  onClick={() => togglePaid(tx.split.id, tx.split.settlement_status !== 'paid')}
+                                  className="rounded-md border border-gray-200 px-2 py-1 text-gray-600 hover:bg-gray-50"
+                                >
+                                  {tx.split.settlement_status === 'paid'
+                                    ? 'Marker som ubetalt'
+                                    : tx.split.settlement_status === 'awaiting_approval'
+                                      ? 'Godkjenn betalt'
+                                      : 'Marker som betalt'}
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </td>
               </tr>
             ))}

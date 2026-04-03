@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { categories as catApi, accounts as accApi } from '../utils/api'
+import { categories as catApi } from '../utils/api'
 import { Plus, Trash2, X } from 'lucide-react'
 
 export default function Categories() {
@@ -8,6 +8,7 @@ export default function Categories() {
   const [showNew, setShowNew] = useState(false)
   const [newCat, setNewCat] = useState({ name: '', color: '#22c55e', icon: '💳', category_type: 'expense' })
   const [ruleInputs, setRuleInputs] = useState({})
+  const [ruleSuggestions, setRuleSuggestions] = useState([])
 
   const load = () => catApi.list().then(setCats)
   useEffect(() => { load() }, [])
@@ -25,6 +26,7 @@ export default function Categories() {
     if (!text) return
     await catApi.addRule(categoryId, text)
     setRuleInputs(r => ({ ...r, [categoryId]: '' }))
+    setRuleSuggestions([])
     load()
   }
 
@@ -41,6 +43,21 @@ export default function Categories() {
       load()
     } catch (error) {
       setErrorMsg(error?.response?.data?.detail || 'Kunne ikke slette kategori.')
+    }
+  }
+
+  async function handleRuleInput(categoryId, value) {
+    setRuleInputs(current => ({ ...current, [categoryId]: value }))
+    const query = value.trim()
+    if (query.length < 2) {
+      setRuleSuggestions([])
+      return
+    }
+    try {
+      const suggestions = await catApi.ruleSuggestions(query)
+      setRuleSuggestions(suggestions)
+    } catch {
+      setRuleSuggestions([])
     }
   }
 
@@ -156,7 +173,8 @@ export default function Categories() {
                   placeholder='f.eks. "REMA 1000"'
                   className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs w-48"
                   value={ruleInputs[cat.id] || ''}
-                  onChange={e => setRuleInputs(r => ({ ...r, [cat.id]: e.target.value }))}
+                  list="category-rule-suggestions"
+                  onChange={e => handleRuleInput(cat.id, e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && addRule(cat.id)}
                 />
                 <button
@@ -170,6 +188,12 @@ export default function Categories() {
           </div>
         ))}
       </div>
+
+      <datalist id="category-rule-suggestions">
+        {ruleSuggestions.map(suggestion => (
+          <option key={suggestion} value={suggestion} />
+        ))}
+      </datalist>
     </div>
   )
 }
