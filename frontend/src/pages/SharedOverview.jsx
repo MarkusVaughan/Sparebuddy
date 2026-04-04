@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { assets as assetApi, goals as goalApi, notifications as notificationApi, transactions as txApi, users as userApi } from '../utils/api'
 import { currentMonth, formatDate, formatMonth, formatNOK } from '../utils/format'
 
@@ -29,6 +30,7 @@ function settlementStatusClass(status) {
 }
 
 export default function SharedOverview() {
+  const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
   const [errorMsg, setErrorMsg] = useState('')
   const [currentUser, setCurrentUser] = useState(null)
@@ -149,6 +151,42 @@ export default function SharedOverview() {
     }
   }
 
+  function goToGoal(goalId) {
+    navigate(`/goals?goal=${goalId}`)
+  }
+
+  function goToAsset(asset) {
+    navigate(`/assets?asset=${encodeURIComponent(`${asset.owner_user_id}::${asset.name}`)}`)
+  }
+
+  function goToTransaction(tx) {
+    const params = new URLSearchParams({
+      month: String(tx.date).slice(0, 7),
+      search: tx.description,
+    })
+    navigate(`/transactions?${params.toString()}`)
+  }
+
+  function goToNotification(item) {
+    if (item.type === 'goal_share' && item.goal_id) {
+      goToGoal(item.goal_id)
+      return
+    }
+    if (item.type === 'asset_share' && item.asset_name) {
+      navigate('/assets')
+      return
+    }
+    if (item.type === 'transaction_share' && item.transaction_date && item.description) {
+      const params = new URLSearchParams({
+        month: String(item.transaction_date).slice(0, 7),
+        search: item.description,
+      })
+      navigate(`/transactions?${params.toString()}`)
+      return
+    }
+    navigate('/notifications')
+  }
+
   if (loading) {
     return <div className="p-8 text-sm text-gray-400">Laster delte ting...</div>
   }
@@ -167,10 +205,10 @@ export default function SharedOverview() {
       )}
 
       <div className="grid grid-cols-4 gap-4 mb-6">
-        <SummaryCard label="Delte mål" value={acceptedGoals.length} />
-        <SummaryCard label="Delte eiendeler/gjeld" value={acceptedAssets.length} />
-        <SummaryCard label="Delte transaksjoner" value={acceptedTransactions.length} />
-        <SummaryCard label="Venter på svar" value={pendingRequests.length} />
+        <SummaryCard label="Delte mål" value={acceptedGoals.length} onClick={() => navigate('/goals')} />
+        <SummaryCard label="Delte eiendeler/gjeld" value={acceptedAssets.length} onClick={() => navigate('/assets')} />
+        <SummaryCard label="Delte transaksjoner" value={acceptedTransactions.length} onClick={() => navigate(`/transactions?${new URLSearchParams({ month: currentMonth() }).toString()}`)} />
+        <SummaryCard label="Venter på svar" value={pendingRequests.length} onClick={() => navigate('/notifications')} />
       </div>
 
       <div className="grid grid-cols-2 gap-6 mb-6">
@@ -181,11 +219,13 @@ export default function SharedOverview() {
               title="Du skylder andre"
               value={formatNOK(owedToOthers)}
               tone="red"
+              onClick={() => navigate(`/transactions?${new URLSearchParams({ month: currentMonth() }).toString()}`)}
             />
             <DebtCard
               title="Andre skylder deg"
               value={formatNOK(owedFromOthers)}
               tone="green"
+              onClick={() => navigate(`/transactions?${new URLSearchParams({ month: currentMonth() }).toString()}`)}
             />
           </div>
           {monthlyStatements.length > 0 && (
@@ -206,7 +246,12 @@ export default function SharedOverview() {
               <p className="text-sm text-gray-400">Ingen aktive forespørsler akkurat nå.</p>
             ) : (
               [...pendingRequests, ...declinedRequests].slice(0, 6).map(item => (
-                <div key={`${item.type}:${item.id}`} className="rounded-lg border border-gray-200 px-4 py-3">
+                <button
+                  key={`${item.type}:${item.id}`}
+                  type="button"
+                  onClick={() => goToNotification(item)}
+                  className="w-full rounded-lg border border-gray-200 px-4 py-3 text-left hover:bg-gray-50"
+                >
                   <div className="flex items-center justify-between gap-4">
                     <div>
                       <p className="text-sm font-medium text-gray-900">
@@ -223,7 +268,7 @@ export default function SharedOverview() {
                   {item.message && (
                     <p className="mt-2 text-sm text-red-700">{item.message}</p>
                   )}
-                </div>
+                </button>
               ))
             )}
           </div>
@@ -237,7 +282,19 @@ export default function SharedOverview() {
             {acceptedGoals.length === 0 ? (
               <p className="text-sm text-gray-400">Ingen delte mål ennå.</p>
             ) : acceptedGoals.map(goal => (
-              <div key={goal.id} className="rounded-lg border border-gray-200 px-4 py-3">
+              <div
+                key={goal.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => goToGoal(goal.id)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    goToGoal(goal.id)
+                  }
+                }}
+                className="rounded-lg border border-gray-200 px-4 py-3 cursor-pointer hover:bg-gray-50"
+              >
                 <div className="flex items-center justify-between gap-4 mb-1">
                   <p className="text-sm font-medium text-gray-900">{goal.name}</p>
                   <div className="flex items-center gap-2">
@@ -247,7 +304,10 @@ export default function SharedOverview() {
                     {!goal.is_owner && goal.share_id && (
                       <button
                         type="button"
-                        onClick={() => handleLeave('goal_share', goal.share_id)}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          handleLeave('goal_share', goal.share_id)
+                        }}
                         disabled={submittingLeave !== null}
                         className="text-xs rounded-lg border border-gray-200 px-2.5 py-1 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
                       >
@@ -271,7 +331,19 @@ export default function SharedOverview() {
             {acceptedAssets.length === 0 ? (
               <p className="text-sm text-gray-400">Ingen delte poster ennå.</p>
             ) : acceptedAssets.map(asset => (
-              <div key={`${asset.owner_user_id}-${asset.name}`} className="rounded-lg border border-gray-200 px-4 py-3">
+              <div
+                key={`${asset.owner_user_id}-${asset.name}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => goToAsset(asset)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    goToAsset(asset)
+                  }
+                }}
+                className="rounded-lg border border-gray-200 px-4 py-3 cursor-pointer hover:bg-gray-50"
+              >
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <p className="text-sm font-medium text-gray-900">{asset.name}</p>
@@ -286,7 +358,10 @@ export default function SharedOverview() {
                     {asset.is_shared_view && asset.share_id && (
                       <button
                         type="button"
-                        onClick={() => handleLeave('asset_share', asset.share_id)}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          handleLeave('asset_share', asset.share_id)
+                        }}
                         disabled={submittingLeave !== null}
                         className="mt-2 text-xs rounded-lg border border-gray-200 px-2.5 py-1 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
                       >
@@ -306,7 +381,19 @@ export default function SharedOverview() {
             {acceptedTransactions.length === 0 ? (
               <p className="text-sm text-gray-400">Ingen godkjente delte transaksjoner ennå.</p>
             ) : acceptedTransactions.slice(0, 12).map(tx => (
-              <div key={tx.id} className="rounded-lg border border-gray-200 px-4 py-3">
+              <div
+                key={tx.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => goToTransaction(tx)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    goToTransaction(tx)
+                  }
+                }}
+                className="rounded-lg border border-gray-200 px-4 py-3 cursor-pointer hover:bg-gray-50"
+              >
                 <div className="flex items-center justify-between gap-4 mb-1">
                   <p className="text-sm font-medium text-gray-900 truncate">{tx.description}</p>
                   <span className="text-xs text-gray-500">{formatDate(tx.date)}</span>
@@ -334,7 +421,10 @@ export default function SharedOverview() {
                     {tx.split?.id && (
                       <button
                         type="button"
-                        onClick={() => handleSettlement(tx.split.id, tx.split.settlement_status !== 'paid')}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          handleSettlement(tx.split.id, tx.split.settlement_status !== 'paid')
+                        }}
                         disabled={submittingSettlement !== null}
                         className="text-xs rounded-lg border border-gray-200 px-2.5 py-1 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
                       >
@@ -352,7 +442,10 @@ export default function SharedOverview() {
                     {tx.shared_role === 'participant' && tx.split?.id && (
                       <button
                         type="button"
-                        onClick={() => handleLeave('transaction_share', tx.split.id)}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          handleLeave('transaction_share', tx.split.id)
+                        }}
                         disabled={submittingLeave !== null}
                         className="text-xs rounded-lg border border-gray-200 px-2.5 py-1 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
                       >
@@ -370,18 +463,36 @@ export default function SharedOverview() {
   )
 }
 
-function SummaryCard({ label, value }) {
+function SummaryCard({ label, value, onClick }) {
+  const className = `bg-white rounded-xl border border-gray-200 p-5 ${onClick ? 'cursor-pointer hover:bg-gray-50' : ''}`
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={`${className} text-left`}>
+        <p className="text-sm text-gray-500 mb-1">{label}</p>
+        <p className="text-2xl font-bold text-gray-900">{value}</p>
+      </button>
+    )
+  }
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5">
+    <div className={className}>
       <p className="text-sm text-gray-500 mb-1">{label}</p>
       <p className="text-2xl font-bold text-gray-900">{value}</p>
     </div>
   )
 }
 
-function DebtCard({ title, value, tone }) {
+function DebtCard({ title, value, tone, onClick }) {
+  const className = `rounded-xl px-4 py-5 ${tone === 'red' ? 'bg-red-50' : 'bg-green-50'} ${onClick ? 'cursor-pointer hover:opacity-90 text-left' : ''}`
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={className}>
+        <p className="text-sm text-gray-600 mb-1">{title}</p>
+        <p className={`text-2xl font-bold ${tone === 'red' ? 'text-red-700' : 'text-green-700'}`}>{value}</p>
+      </button>
+    )
+  }
   return (
-    <div className={`rounded-xl px-4 py-5 ${tone === 'red' ? 'bg-red-50' : 'bg-green-50'}`}>
+    <div className={className}>
       <p className="text-sm text-gray-600 mb-1">{title}</p>
       <p className={`text-2xl font-bold ${tone === 'red' ? 'text-red-700' : 'text-green-700'}`}>{value}</p>
     </div>

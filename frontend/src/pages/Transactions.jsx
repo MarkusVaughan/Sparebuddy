@@ -2,7 +2,8 @@ import { useEffect, useState, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { transactions as txApi, accounts as accApi, categories as catApi, users as userApi } from '../utils/api'
 import { Plus } from 'lucide-react'
-import { formatNOK, formatDate, currentMonth } from '../utils/format'
+import { formatNOK, formatDate } from '../utils/format'
+import { getActiveMonth, setActiveMonth } from '../utils/month'
 import { Upload, RefreshCw, Search } from 'lucide-react'
 
 function sortUsers(users) {
@@ -40,7 +41,7 @@ export default function Transactions() {
   const [filters, setFilters] = useState({
     account_id: searchParams.get('account_id') || '',
     category_id: searchParams.get('category_id') || '',
-    month: searchParams.get('month') || currentMonth(),
+    month: searchParams.get('month') || getActiveMonth(),
     search: searchParams.get('search') || '',
     uncategorized: searchParams.get('uncategorized') === 'true',
   })
@@ -61,6 +62,12 @@ export default function Transactions() {
       setCurrentUser(me)
     })
   }, [])
+
+  useEffect(() => {
+    if (filters.month) {
+      setActiveMonth(filters.month)
+    }
+  }, [filters.month])
 
   useEffect(() => {
     setLoading(true)

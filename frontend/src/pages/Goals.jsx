@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { assets as assetApi, categories as categoryApi, goals as goalApi, users as userApi } from '../utils/api'
 import { formatMonth, formatNOK } from '../utils/format'
 import { Pencil, Plus, Target, Trash2 } from 'lucide-react'
@@ -80,6 +81,7 @@ function labelsFor(goalType) {
 }
 
 export default function Goals() {
+  const [searchParams] = useSearchParams()
   const [items, setItems] = useState([])
   const [categories, setCategories] = useState([])
   const [assets, setAssets] = useState([])
@@ -92,6 +94,7 @@ export default function Goals() {
   const [form, setForm] = useState(defaultForm())
   const [shareSearch, setShareSearch] = useState('')
   const [editingGoalId, setEditingGoalId] = useState(null)
+  const selectedGoalId = searchParams.get('goal')
 
   const load = () => {
     setLoading(true)
@@ -500,7 +503,13 @@ export default function Goals() {
           const itemLabels = labelsFor(item.goal_type)
 
           return (
-            <div key={item.id} className="bg-white rounded-xl border border-gray-200 p-5">
+            <div
+              key={item.id}
+              id={`goal-${item.id}`}
+              className={`bg-white rounded-xl border p-5 ${
+                String(item.id) === selectedGoalId ? 'border-green-400 ring-2 ring-green-100' : 'border-gray-200'
+              }`}
+            >
               <div className="flex items-start justify-between gap-4 mb-4">
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">

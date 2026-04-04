@@ -1,19 +1,18 @@
 import { useEffect, useState } from 'react'
 import { budgets as budgetApi } from '../utils/api'
 import { formatNOK, formatMonth } from '../utils/format'
-
-function previousMonth() {
-  const d = new Date()
-  d.setMonth(d.getMonth() - 1)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-}
+import { getActiveMonth, setActiveMonth } from '../utils/month'
 
 export default function Budget() {
-  const [month, setMonth] = useState(previousMonth())
+  const [month, setMonth] = useState(getActiveMonth())
   const [items, setItems] = useState([])
   const [editId, setEditId] = useState(null)
   const [editAmount, setEditAmount] = useState('')
   const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setActiveMonth(month)
+  }, [month])
 
   useEffect(() => {
     setLoading(true)
@@ -67,15 +66,16 @@ export default function Budget() {
               <th className="px-4 py-3 text-left">Kategori</th>
               <th className="px-4 py-3 text-right">Budsjett</th>
               <th className="px-4 py-3 text-right">Faktisk</th>
+              <th className="px-4 py-3 text-right">Snitt 3 mnd</th>
               <th className="px-4 py-3 text-right">Gjenstår</th>
               <th className="px-4 py-3 text-left w-48">Fremgang</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
             {loading ? (
-              <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">Laster...</td></tr>
+              <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">Laster...</td></tr>
             ) : items.length === 0 ? (
-              <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">
+              <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">
                 Ingen data for denne måneden. Importer transaksjoner og sett budsjettmål.
               </td></tr>
             ) : items.map(item => {
@@ -111,6 +111,9 @@ export default function Budget() {
                   </td>
                   <td className={`px-4 py-3 text-right tabular-nums font-medium ${overBudget ? 'text-red-600' : 'text-gray-800'}`}>
                     {formatNOK(item.actual)}
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums text-gray-600">
+                    {formatNOK(item.average_actual || 0)}
                   </td>
                   <td className={`px-4 py-3 text-right tabular-nums text-sm ${
                     item.remaining === null ? 'text-gray-300' :

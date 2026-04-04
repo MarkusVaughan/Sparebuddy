@@ -3,7 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import extract, func
+from sqlalchemy import and_, extract, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
@@ -392,9 +392,28 @@ def apply_rules(account_id: Optional[int] = None, overwrite: bool = False, db: S
 def monthly_summary(month: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     year, mon = month.split("-")
     own_results = (
-        db.query(Category.id, Category.name, Category.color, Category.icon, func.sum(func.abs(Transaction.amount)).label("total"))
+        db.query(
+            Category.id,
+            Category.name,
+            Category.color,
+            Category.icon,
+            func.sum(
+                func.abs(Transaction.amount) - func.coalesce(
+                    TransactionSplit.settlement_amount,
+                    func.abs(Transaction.amount) * TransactionSplit.share_ratio,
+                    0,
+                )
+            ).label("total"),
+        )
         .join(Transaction, Transaction.category_id == Category.id)
         .join(Account, Transaction.account_id == Account.id)
+        .outerjoin(
+            TransactionSplit,
+            and_(
+                TransactionSplit.transaction_id == Transaction.id,
+                TransactionSplit.status == ShareStatus.accepted,
+            ),
+        )
         .filter(
             Account.user_id == current_user.id,
             extract("year", Transaction.date) == int(year),

@@ -2,16 +2,21 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import { transactions as txApi, assets as assetApi } from '../utils/api'
-import { formatNOK, formatMonth, currentMonth } from '../utils/format'
+import { formatNOK, formatMonth } from '../utils/format'
+import { getActiveMonth, setActiveMonth } from '../utils/month'
 import { TrendingDown, TrendingUp, PiggyBank } from 'lucide-react'
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const [month, setMonth] = useState(currentMonth())
+  const [month, setMonth] = useState(getActiveMonth())
   const [summary, setSummary] = useState([])
   const [assetData, setAssetData] = useState(null)
   const [uncategorizedCount, setUncategorizedCount] = useState(0)
   const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setActiveMonth(month)
+  }, [month])
 
   useEffect(() => {
     setLoading(true)
