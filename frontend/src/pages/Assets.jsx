@@ -5,7 +5,7 @@ import {
 } from 'recharts'
 import { assets as assetApi, users as userApi } from '../utils/api'
 import { formatNOK, formatDate } from '../utils/format'
-import { ArrowUpCircle, Check, Clock3, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { ArrowUpCircle, Check, Clock3, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 
 const ASSET_TYPES = [
   { value: 'bank', label: 'Bankkonto', emoji: '🏦' },
@@ -446,55 +446,12 @@ export default function Assets() {
           {users.length > 0 && (
             <div className="col-span-2">
               <label className="block text-xs font-medium text-gray-600 mb-2">Del posten med andre brukere</label>
-              <div className="space-y-2 rounded-xl border border-gray-200 p-3 bg-gray-50">
-                {users.map(user => {
-                  const existing = form.shared_users.find(s => s.user_id === user.id)
-                  const checked = Boolean(existing)
-                  const pct = existing ? Math.round(existing.share_ratio * 100) : 50
-                  return (
-                    <div key={user.id} className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => setForm(current => ({
-                          ...current,
-                          shared_users: checked
-                            ? current.shared_users.filter(s => s.user_id !== user.id)
-                            : [...current.shared_users, { user_id: user.id, share_ratio: 0.5 }],
-                        }))}
-                      />
-                      <span className="flex-1 text-gray-700">{user.name}</span>
-                      {checked && (
-                        <div className="flex items-center gap-1">
-                          <input
-                            type="number"
-                            min="1"
-                            max="99"
-                            step="1"
-                            className="w-16 border border-gray-200 rounded-lg px-2 py-1 text-sm text-right"
-                            value={pct}
-                            onChange={e => {
-                              const ratio = Math.min(99, Math.max(1, parseInt(e.target.value) || 1)) / 100
-                              setForm(current => ({
-                                ...current,
-                                shared_users: current.shared_users.map(s =>
-                                  s.user_id === user.id ? { ...s, share_ratio: ratio } : s
-                                ),
-                              }))
-                            }}
-                          />
-                          <span className="text-gray-400 text-xs">%</span>
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-                {form.shared_users.length > 0 && (
-                  <p className="text-xs text-gray-400 px-1">
-                    Din andel: {100 - Math.round(form.shared_users.reduce((s, u) => s + u.share_ratio, 0) * 100)}%
-                  </p>
-                )}
-              </div>
+              <UserSharePicker
+                allUsers={users}
+                suggestedUserIds={suggestedUserIds(data)}
+                sharedUsers={form.shared_users}
+                onChange={shared_users => setForm(current => ({ ...current, shared_users }))}
+              />
             </div>
           )}
           <div>
@@ -848,50 +805,13 @@ function AssetTable({
                         onChange={e => setEditForm(current => ({ ...current, notes: e.target.value }))}
                       />
                       {users.length > 0 && (
-                        <div className="space-y-1">
-                          {users.map(user => {
-                            const existing = editForm.shared_users.find(s => s.user_id === user.id)
-                            const checked = Boolean(existing)
-                            const pct = existing ? Math.round(existing.share_ratio * 100) : 50
-                            return (
-                              <div key={user.id} className="flex items-center gap-2">
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() => setEditForm(current => ({
-                                    ...current,
-                                    shared_users: checked
-                                      ? current.shared_users.filter(s => s.user_id !== user.id)
-                                      : [...current.shared_users, { user_id: user.id, share_ratio: 0.5 }],
-                                  }))}
-                                />
-                                <span className="text-xs text-gray-600 flex-1">{user.name}</span>
-                                {checked && (
-                                  <>
-                                    <input
-                                      type="number"
-                                      min="1"
-                                      max="99"
-                                      step="1"
-                                      className="w-14 border border-gray-200 rounded px-1.5 py-0.5 text-xs text-right"
-                                      value={pct}
-                                      onChange={e => {
-                                        const ratio = Math.min(99, Math.max(1, parseInt(e.target.value) || 1)) / 100
-                                        setEditForm(current => ({
-                                          ...current,
-                                          shared_users: current.shared_users.map(s =>
-                                            s.user_id === user.id ? { ...s, share_ratio: ratio } : s
-                                          ),
-                                        }))
-                                      }}
-                                    />
-                                    <span className="text-xs text-gray-400">%</span>
-                                  </>
-                                )}
-                              </div>
-                            )
-                          })}
-                        </div>
+                        <UserSharePicker
+                          allUsers={users}
+                          suggestedUserIds={asset.shared_user_ids || []}
+                          sharedUsers={editForm.shared_users}
+                          compact
+                          onChange={shared_users => setEditForm(current => ({ ...current, shared_users }))}
+                        />
                       )}
                     </div>
                   ) : (
@@ -993,6 +913,138 @@ function KpiCard({ tone, label, value }) {
     <div className={`${bg} border ${border} rounded-xl p-5`}>
       <p className={`text-sm ${labelColor} mb-1`}>{label}</p>
       <p className={`text-3xl font-bold ${valueColor}`}>{value}</p>
+    </div>
+  )
+}
+
+/** IDs of users this person has shared with before — drives suggestions */
+function suggestedUserIds(assetData) {
+  if (!assetData) return []
+  const ids = new Set()
+  for (const a of assetData.assets) {
+    if (!a.is_shared_view) {
+      for (const s of a.shared_users || []) ids.add(s.user_id)
+    }
+  }
+  return [...ids]
+}
+
+/**
+ * UserSharePicker
+ * Shows previously-shared users as instant suggestions.
+ * Other users are reachable via a search input.
+ */
+function UserSharePicker({ allUsers, suggestedUserIds, sharedUsers, onChange, compact = false }) {
+  const [query, setQuery] = useState('')
+
+  const selectedIds = new Set(sharedUsers.map(s => s.user_id))
+
+  const suggested = allUsers.filter(u => suggestedUserIds.includes(u.id) && !selectedIds.has(u.id))
+  const searchResults = query.trim().length > 0
+    ? allUsers.filter(u =>
+        !selectedIds.has(u.id) &&
+        u.name.toLowerCase().includes(query.trim().toLowerCase())
+      )
+    : []
+
+  function add(userId) {
+    onChange([...sharedUsers, { user_id: userId, share_ratio: 0.5 }])
+    setQuery('')
+  }
+
+  function remove(userId) {
+    onChange(sharedUsers.filter(s => s.user_id !== userId))
+  }
+
+  function updateRatio(userId, pctString) {
+    const ratio = Math.min(99, Math.max(1, parseInt(pctString) || 1)) / 100
+    onChange(sharedUsers.map(s => s.user_id === userId ? { ...s, share_ratio: ratio } : s))
+  }
+
+  const ownerPct = 100 - Math.round(sharedUsers.reduce((sum, s) => sum + s.share_ratio, 0) * 100)
+
+  return (
+    <div className={`rounded-xl border border-gray-200 bg-gray-50 ${compact ? 'p-2 space-y-1.5' : 'p-3 space-y-2'}`}>
+
+      {/* Selected users */}
+      {sharedUsers.map(s => {
+        const user = allUsers.find(u => u.id === s.user_id)
+        const pct = Math.round(s.share_ratio * 100)
+        return (
+          <div key={s.user_id} className={`flex items-center gap-2 rounded-lg border border-gray-200 bg-white ${compact ? 'px-2 py-1' : 'px-3 py-2'}`}>
+            <span className={`flex-1 text-gray-700 ${compact ? 'text-xs' : 'text-sm'}`}>{user?.name ?? `Bruker ${s.user_id}`}</span>
+            <input
+              type="number"
+              min="1"
+              max="99"
+              step="1"
+              className={`border border-gray-200 rounded px-1.5 py-0.5 text-right ${compact ? 'w-12 text-xs' : 'w-16 text-sm'}`}
+              value={pct}
+              onChange={e => updateRatio(s.user_id, e.target.value)}
+            />
+            <span className={`text-gray-400 ${compact ? 'text-xs' : 'text-xs'}`}>%</span>
+            <button type="button" onClick={() => remove(s.user_id)} className="text-gray-300 hover:text-red-500 transition-colors">
+              <X size={compact ? 12 : 14} />
+            </button>
+          </div>
+        )
+      })}
+
+      {/* Owner's share */}
+      {sharedUsers.length > 0 && (
+        <p className="text-xs text-gray-400 px-1">Din andel: {ownerPct}%</p>
+      )}
+
+      {/* Suggestions */}
+      {suggested.length > 0 && (
+        <div>
+          <p className="text-xs text-gray-400 px-1 mb-1">Tidligere delt med</p>
+          <div className="flex flex-wrap gap-1.5">
+            {suggested.map(u => (
+              <button
+                key={u.id}
+                type="button"
+                onClick={() => add(u.id)}
+                className="inline-flex items-center gap-1 rounded-full border border-purple-200 bg-purple-50 px-2.5 py-1 text-xs text-purple-700 hover:bg-purple-100 transition-colors"
+              >
+                <Plus size={10} /> {u.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Search */}
+      <div className="relative">
+        <Search size={13} className="absolute left-2.5 top-2.5 text-gray-400 pointer-events-none" />
+        <input
+          type="text"
+          placeholder="Søk etter bruker..."
+          className={`w-full border border-gray-200 rounded-lg bg-white pl-7 pr-3 py-2 ${compact ? 'text-xs' : 'text-sm'}`}
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+        />
+      </div>
+
+      {/* Search results */}
+      {searchResults.length > 0 && (
+        <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+          {searchResults.map(u => (
+            <button
+              key={u.id}
+              type="button"
+              onClick={() => add(u.id)}
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left border-b border-gray-50 last:border-0"
+            >
+              <Plus size={13} className="text-gray-400" /> {u.name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {query.trim().length > 0 && searchResults.length === 0 && (
+        <p className="text-xs text-gray-400 px-1">Ingen brukere funnet.</p>
+      )}
     </div>
   )
 }
