@@ -5,6 +5,7 @@ import { Plus } from 'lucide-react'
 import { formatNOK, formatDate } from '../utils/format'
 import { getActiveMonth, setActiveMonth } from '../utils/month'
 import { Upload, RefreshCw, Search } from 'lucide-react'
+import VippsPayButton from '../components/VippsPayButton'
 
 function sortUsers(users) {
   return [...users].sort((a, b) => {
@@ -221,6 +222,7 @@ export default function Transactions() {
       .filter(Boolean),
   )]
   const suggestedUsers = users.filter(user => previousSharedUserIds.includes(user.id))
+  const userById = Object.fromEntries(users.map(u => [u.id, u]))
 
   function searchedUsers(txId) {
     const query = (shareSearchByTx[txId] || '').trim().toLowerCase()
@@ -440,6 +442,13 @@ export default function Transactions() {
                                   : 'Meld som betalt'}
                             </button>
                           )}
+                      {tx.split?.settlement_status !== 'paid' && (
+                        <VippsPayButton
+                          phoneNumber={userById[tx.split?.owner_user_id]?.vipps_phone}
+                          amountNOK={tx.split?.settlement_amount || 0}
+                          message={tx.description}
+                        />
+                      )}
                     </div>
                   ) : (
                     <div className="space-y-1">
@@ -578,6 +587,14 @@ export default function Transactions() {
                                       ? 'Godkjenn betalt'
                                       : 'Marker som betalt'}
                                 </button>
+                              )}
+                              {tx.split.status === 'accepted' && tx.split.settlement_status !== 'paid' && (
+                                <VippsPayButton
+                                  phoneNumber={currentUser?.vipps_phone}
+                                  amountNOK={tx.split?.settlement_amount || 0}
+                                  message={tx.description}
+                                  isOwner
+                                />
                               )}
                             </div>
                           )}

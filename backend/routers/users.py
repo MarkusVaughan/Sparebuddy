@@ -19,6 +19,7 @@ class OnboardingUpdate(BaseModel):
 class ProfileUpdate(BaseModel):
     name: str
     email: str
+    vipps_phone: Optional[str] = None
 
 
 class PasswordUpdate(BaseModel):
@@ -40,6 +41,7 @@ def serialize_user(user: User, trusted_ids: Optional[set[int]] = None):
         "id": user.id,
         "name": user.name,
         "email": user.email,
+        "vipps_phone": user.vipps_phone,
         "is_trusted": user.id in (trusted_ids or set()),
     }
 
@@ -84,6 +86,7 @@ def get_me(current_user: User = Depends(get_current_user)):
         "id": current_user.id,
         "name": current_user.name,
         "email": current_user.email,
+        "vipps_phone": current_user.vipps_phone,
         "onboarding_completed": current_user.onboarding_completed,
         "is_active": current_user.is_active,
     }
@@ -103,6 +106,7 @@ def update_me(
         raise HTTPException(status_code=400, detail="Email is already in use")
     current_user.name = payload.name.strip()
     current_user.email = email
+    current_user.vipps_phone = payload.vipps_phone.strip() if payload.vipps_phone else None
     db.commit()
     return {"ok": True}
 

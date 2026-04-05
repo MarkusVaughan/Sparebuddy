@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { assets as assetApi, goals as goalApi, notifications as notificationApi, transactions as txApi, users as userApi } from '../utils/api'
 import { currentMonth, formatDate, formatMonth, formatNOK } from '../utils/format'
+import VippsPayButton from '../components/VippsPayButton'
 
 function statusLabel(status) {
   if (status === 'pending') return 'Venter'
@@ -38,24 +39,27 @@ export default function SharedOverview() {
   const [assets, setAssets] = useState([])
   const [transactions, setTransactions] = useState([])
   const [notifications, setNotifications] = useState([])
+  const [userList, setUserList] = useState([])
   const [submittingLeave, setSubmittingLeave] = useState(null)
   const [submittingSettlement, setSubmittingSettlement] = useState(null)
 
   async function load() {
     setLoading(true)
     try {
-      const [me, goalItems, assetResponse, txResponse, notificationItems] = await Promise.all([
+      const [me, goalItems, assetResponse, txResponse, notificationItems, allUsers] = await Promise.all([
       userApi.me(),
       goalApi.list(),
       assetApi.list(),
       txApi.list({ limit: 500 }),
       notificationApi.list(),
+      userApi.list(),
       ])
       setCurrentUser(me)
       setGoals(goalItems)
       setAssets(assetResponse.assets || [])
       setTransactions(txResponse.items || [])
       setNotifications(notificationItems)
+      setUserList(allUsers)
     } catch (error) {
       setErrorMsg(error?.response?.data?.detail || 'Kunne ikke laste delte data.')
     } finally {
@@ -186,6 +190,8 @@ export default function SharedOverview() {
     }
     navigate('/notifications')
   }
+
+  const userById = Object.fromEntries(userList.map(u => [u.id, u]))
 
   if (loading) {
     return <div className="p-8 text-sm text-gray-400">Laster delte ting...</div>
@@ -438,6 +444,25 @@ export default function SharedOverview() {
                               ? 'Godkjenn betalt'
                               : 'Marker som betalt'}
                       </button>
+                    )}
+                    {tx.split?.settlement_status !== 'paid' && tx.shared_role === 'participant' && (
+                      <span onClick={e => e.stopPropagation()}>
+                        <VippsPayButton
+                          phoneNumber={userById[tx.split?.owner_user_id]?.vipps_phone}
+                          amountNOK={tx.split?.settlement_amount || 0}
+                          message={tx.description}
+                        />
+                      </span>
+                    )}
+                    {tx.split?.settlement_status !== 'paid' && tx.shared_role !== 'participant' && tx.split?.status === 'accepted' && (
+                      <span onClick={e => e.stopPropagation()}>
+                        <VippsPayButton
+                          phoneNumber={currentUser?.vipps_phone}
+                          amountNOK={tx.split?.settlement_amount || 0}
+                          message={tx.description}
+                          isOwner
+                        />
+                      </span>
                     )}
                     {tx.shared_role === 'participant' && tx.split?.id && (
                       <button

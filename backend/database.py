@@ -66,6 +66,7 @@ class User(Base):
     auth_token_version = Column(BigInteger, nullable=False, default=1)
     onboarding_completed = Column(Boolean, nullable=False, default=False)
     is_active = Column(Boolean, nullable=False, default=True)
+    vipps_phone = Column(String, nullable=True)
     deactivated_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 

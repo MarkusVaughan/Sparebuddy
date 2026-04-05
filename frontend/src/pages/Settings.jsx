@@ -4,7 +4,7 @@ import { AUTH_TOKEN_STORAGE_KEY, users as userApi } from '../utils/api'
 const emptyInviteForm = { name: '', email: '' }
 
 export default function Settings({ user, onUserUpdated, onDeactivated }) {
-  const [profileForm, setProfileForm] = useState({ name: '', email: '' })
+  const [profileForm, setProfileForm] = useState({ name: '', email: '', vipps_phone: '' })
   const [passwordForm, setPasswordForm] = useState({ current_password: '', new_password: '' })
   const [deactivatePassword, setDeactivatePassword] = useState('')
   const [inviteForm, setInviteForm] = useState(emptyInviteForm)
@@ -16,7 +16,7 @@ export default function Settings({ user, onUserUpdated, onDeactivated }) {
 
   useEffect(() => {
     if (!user) return
-    setProfileForm({ name: user.name || '', email: user.email || '' })
+    setProfileForm({ name: user.name || '', email: user.email || '', vipps_phone: user.vipps_phone || '' })
   }, [user])
 
   async function load() {
@@ -151,6 +151,17 @@ export default function Settings({ user, onUserUpdated, onDeactivated }) {
                 value={profileForm.email}
                 onChange={e => setProfileForm(current => ({ ...current, email: e.target.value }))}
               />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Vipps-nummer</label>
+              <input
+                type="text"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                placeholder="f.eks. 47912345678"
+                value={profileForm.vipps_phone}
+                onChange={e => setProfileForm(current => ({ ...current, vipps_phone: e.target.value }))}
+              />
+              <p className="text-xs text-gray-400 mt-1">Brukes for Vipps-betaling ved deling av utgifter</p>
             </div>
             <button
               type="submit"
