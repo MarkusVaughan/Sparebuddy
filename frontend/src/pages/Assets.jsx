@@ -21,13 +21,13 @@ const emptyNewForm = () => ({
   asset_type: 'bank',
   value: '',
   recorded_date: new Date().toISOString().split('T')[0],
-  shared_user_ids: [],
+  shared_users: [],   // [{user_id, share_ratio}]
   notes: '',
 })
 
 const emptyEditForm = () => ({
   asset_type: 'bank',
-  shared_user_ids: [],
+  shared_users: [],   // [{user_id, share_ratio}]
   notes: '',
 })
 
@@ -130,6 +130,7 @@ export default function Assets() {
   const [errorMsg, setErrorMsg] = useState('')
   const [form, setForm] = useState(emptyNewForm())
   const [saving, setSaving] = useState(false)
+  const [ratioEditById, setRatioEditById] = useState({}) // shareId -> draft pct string
 
   async function load() {
     const [assetData, netWorthHistory, userList, me] = await Promise.all([
@@ -186,7 +187,7 @@ export default function Assets() {
         asset_type: form.asset_type,
         value: nextValue,
         recorded_date: form.recorded_date,
-        shared_user_ids: form.shared_user_ids,
+        shared_users: form.shared_users,
         notes: form.notes,
       })
       await load()
@@ -214,7 +215,7 @@ export default function Assets() {
     setEditId(asset.id)
     setEditForm({
       asset_type: asset.asset_type,
-      shared_user_ids: asset.shared_user_ids || [],
+      shared_users: (asset.shared_users || []).map(s => ({ user_id: s.user_id, share_ratio: s.share_ratio })),
       notes: asset.notes || '',
     })
   }
@@ -229,7 +230,7 @@ export default function Assets() {
     try {
       await assetApi.update(assetId, {
         asset_type: editForm.asset_type,
-        shared_user_ids: editForm.shared_user_ids,
+        shared_users: editForm.shared_users,
         notes: editForm.notes,
       })
       await load()
@@ -269,6 +270,19 @@ export default function Assets() {
       cancelSnapshot()
     } catch (error) {
       setErrorMsg(error?.response?.data?.detail || 'Kunne ikke registrere ny verdi.')
+    }
+  }
+
+  async function saveRatio(shareId, pctString) {
+    const pct = parseFloat(pctString)
+    if (isNaN(pct) || pct <= 0 || pct >= 100) return
+    setErrorMsg('')
+    try {
+      await assetApi.updateShareRatio(shareId, pct / 100)
+      setRatioEditById(prev => { const next = { ...prev }; delete next[shareId]; return next })
+      await load()
+    } catch (error) {
+      setErrorMsg(error?.response?.data?.detail || 'Kunne ikke oppdatere fordeling.')
     }
   }
 
@@ -432,22 +446,54 @@ export default function Assets() {
           {users.length > 0 && (
             <div className="col-span-2">
               <label className="block text-xs font-medium text-gray-600 mb-2">Del posten med andre brukere</label>
-              <div className="grid grid-cols-2 gap-2 rounded-xl border border-gray-200 p-3 bg-gray-50">
-                {users.map(user => (
-                  <label key={user.id} className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={form.shared_user_ids.includes(user.id)}
-                      onChange={() => setForm(current => ({
-                        ...current,
-                        shared_user_ids: current.shared_user_ids.includes(user.id)
-                          ? current.shared_user_ids.filter(id => id !== user.id)
-                          : [...current.shared_user_ids, user.id],
-                      }))}
-                    />
-                    <span className="flex-1 text-gray-700">{user.name}</span>
-                  </label>
-                ))}
+              <div className="space-y-2 rounded-xl border border-gray-200 p-3 bg-gray-50">
+                {users.map(user => {
+                  const existing = form.shared_users.find(s => s.user_id === user.id)
+                  const checked = Boolean(existing)
+                  const pct = existing ? Math.round(existing.share_ratio * 100) : 50
+                  return (
+                    <div key={user.id} className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => setForm(current => ({
+                          ...current,
+                          shared_users: checked
+                            ? current.shared_users.filter(s => s.user_id !== user.id)
+                            : [...current.shared_users, { user_id: user.id, share_ratio: 0.5 }],
+                        }))}
+                      />
+                      <span className="flex-1 text-gray-700">{user.name}</span>
+                      {checked && (
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            min="1"
+                            max="99"
+                            step="1"
+                            className="w-16 border border-gray-200 rounded-lg px-2 py-1 text-sm text-right"
+                            value={pct}
+                            onChange={e => {
+                              const ratio = Math.min(99, Math.max(1, parseInt(e.target.value) || 1)) / 100
+                              setForm(current => ({
+                                ...current,
+                                shared_users: current.shared_users.map(s =>
+                                  s.user_id === user.id ? { ...s, share_ratio: ratio } : s
+                                ),
+                              }))
+                            }}
+                          />
+                          <span className="text-gray-400 text-xs">%</span>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+                {form.shared_users.length > 0 && (
+                  <p className="text-xs text-gray-400 px-1">
+                    Din andel: {100 - Math.round(form.shared_users.reduce((s, u) => s + u.share_ratio, 0) * 100)}%
+                  </p>
+                )}
               </div>
             </div>
           )}
@@ -554,6 +600,9 @@ export default function Assets() {
         assetHistories={assetHistories}
         users={users}
         currentUser={currentUser}
+        ratioEditById={ratioEditById}
+        setRatioEditById={setRatioEditById}
+        saveRatio={saveRatio}
       />
 
       {selectedHistoryAsset && (
@@ -626,6 +675,9 @@ export default function Assets() {
         assetHistories={assetHistories}
         users={users}
         currentUser={currentUser}
+        ratioEditById={ratioEditById}
+        setRatioEditById={setRatioEditById}
+        saveRatio={saveRatio}
       />
     </div>
   )
@@ -652,6 +704,9 @@ function AssetTable({
   assetHistories,
   users,
   currentUser,
+  ratioEditById,
+  setRatioEditById,
+  saveRatio,
 }) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mb-4">
@@ -685,13 +740,71 @@ function AssetTable({
                 <td className="px-4 py-3 font-medium text-gray-800">
                   <div>{asset.name}</div>
                   {asset.is_shared_view ? (
-                    <div className="text-xs text-purple-600 mt-1">Delt av {asset.owner_name}</div>
-                  ) : asset.shared_user_ids?.length > 0 ? (
                     <div className="text-xs text-purple-600 mt-1">
-                      Delt med {(asset.shared_users || []).map((share) => {
-                        const name = users.find(user => user.id === share.user_id)?.name || share.user_id
-                        return share.status === 'pending' ? `${name} (venter)` : name
-                      }).join(', ')}
+                      Delt av {asset.owner_name} • Din andel: {Math.round(asset.my_ratio * 100)}%
+                    </div>
+                  ) : asset.shared_users?.length > 0 ? (
+                    <div className="mt-1 space-y-1">
+                      {asset.shared_users.map((share) => {
+                        const userName = users.find(u => u.id === share.user_id)?.name || `Bruker ${share.user_id}`
+                        const isEditing = share.share_id != null && ratioEditById[share.share_id] != null
+                        const pct = Math.round(share.share_ratio * 100)
+                        if (share.status === 'pending') {
+                          return (
+                            <div key={share.user_id} className="text-xs text-gray-400">
+                              {userName} – {pct}% (venter)
+                            </div>
+                          )
+                        }
+                        // Owner can edit ratio for accepted shares
+                        return (
+                          <div key={share.user_id} className="flex items-center gap-1">
+                            <span className="text-xs text-purple-600">{userName} –</span>
+                            {isEditing ? (
+                              <>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max="99"
+                                  step="1"
+                                  autoFocus
+                                  className="w-14 border border-gray-200 rounded px-1.5 py-0.5 text-xs text-right"
+                                  value={ratioEditById[share.share_id]}
+                                  onChange={e => setRatioEditById(prev => ({ ...prev, [share.share_id]: e.target.value }))}
+                                  onKeyDown={e => {
+                                    if (e.key === 'Enter') saveRatio(share.share_id, ratioEditById[share.share_id])
+                                    if (e.key === 'Escape') setRatioEditById(prev => { const n = { ...prev }; delete n[share.share_id]; return n })
+                                  }}
+                                />
+                                <span className="text-xs text-gray-400">%</span>
+                                <button
+                                  type="button"
+                                  onClick={() => saveRatio(share.share_id, ratioEditById[share.share_id])}
+                                  className="text-green-600 hover:text-green-700 text-xs"
+                                >✓</button>
+                                <button
+                                  type="button"
+                                  onClick={() => setRatioEditById(prev => { const n = { ...prev }; delete n[share.share_id]; return n })}
+                                  className="text-gray-400 hover:text-gray-600 text-xs"
+                                >✕</button>
+                              </>
+                            ) : (
+                              <>
+                                <span className="text-xs text-purple-600">{pct}%</span>
+                                <button
+                                  type="button"
+                                  title="Endre fordeling"
+                                  onClick={() => setRatioEditById(prev => ({ ...prev, [share.share_id]: String(pct) }))}
+                                  className="text-gray-300 hover:text-blue-500 transition-colors"
+                                >
+                                  <Pencil size={11} />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        )
+                      })}
+                      <div className="text-xs text-gray-400">Din andel: {Math.round(asset.my_ratio * 100)}%</div>
                     </div>
                   ) : null}
                 </td>
@@ -735,22 +848,49 @@ function AssetTable({
                         onChange={e => setEditForm(current => ({ ...current, notes: e.target.value }))}
                       />
                       {users.length > 0 && (
-                        <div className="flex flex-wrap gap-2">
-                          {users.map(user => (
-                            <label key={user.id} className="inline-flex items-center gap-1 text-xs text-gray-600">
-                              <input
-                                type="checkbox"
-                                checked={editForm.shared_user_ids.includes(user.id)}
-                                onChange={() => setEditForm(current => ({
-                                  ...current,
-                                  shared_user_ids: current.shared_user_ids.includes(user.id)
-                                    ? current.shared_user_ids.filter(id => id !== user.id)
-                                    : [...current.shared_user_ids, user.id],
-                                }))}
-                              />
-                              {user.name}
-                            </label>
-                          ))}
+                        <div className="space-y-1">
+                          {users.map(user => {
+                            const existing = editForm.shared_users.find(s => s.user_id === user.id)
+                            const checked = Boolean(existing)
+                            const pct = existing ? Math.round(existing.share_ratio * 100) : 50
+                            return (
+                              <div key={user.id} className="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => setEditForm(current => ({
+                                    ...current,
+                                    shared_users: checked
+                                      ? current.shared_users.filter(s => s.user_id !== user.id)
+                                      : [...current.shared_users, { user_id: user.id, share_ratio: 0.5 }],
+                                  }))}
+                                />
+                                <span className="text-xs text-gray-600 flex-1">{user.name}</span>
+                                {checked && (
+                                  <>
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      max="99"
+                                      step="1"
+                                      className="w-14 border border-gray-200 rounded px-1.5 py-0.5 text-xs text-right"
+                                      value={pct}
+                                      onChange={e => {
+                                        const ratio = Math.min(99, Math.max(1, parseInt(e.target.value) || 1)) / 100
+                                        setEditForm(current => ({
+                                          ...current,
+                                          shared_users: current.shared_users.map(s =>
+                                            s.user_id === user.id ? { ...s, share_ratio: ratio } : s
+                                          ),
+                                        }))
+                                      }}
+                                    />
+                                    <span className="text-xs text-gray-400">%</span>
+                                  </>
+                                )}
+                              </div>
+                            )
+                          })}
                         </div>
                       )}
                     </div>

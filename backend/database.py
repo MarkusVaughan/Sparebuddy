@@ -236,6 +236,7 @@ class AssetShare(Base):
     shared_user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
     asset_name = Column(String, nullable=False)
     status = Column(Enum(ShareStatus, name="share_status"), nullable=False, default=ShareStatus.pending)
+    share_ratio = Column(Numeric(5, 4), nullable=False, default=0.5)
     decline_message = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     responded_at = Column(DateTime(timezone=True), nullable=True)

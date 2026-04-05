@@ -69,6 +69,7 @@ export const assets = {
   netWorthHistory: () => api.get('/assets/net-worth-history').then(r => r.data),
   record: (data) => api.post('/assets/', data).then(r => r.data),
   update: (id, data) => api.patch(`/assets/${id}`, data).then(r => r.data),
+  updateShareRatio: (shareId, shareRatio) => api.patch(`/assets/shares/${shareId}/ratio`, { share_ratio: shareRatio }).then(r => r.data),
   delete: (id) => api.delete(`/assets/${id}`).then(r => r.data),
 }
 
